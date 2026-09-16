@@ -1,0 +1,3315 @@
+import {
+  useEffect,
+  useRef,
+  useState,
+  createContext,
+  useContext,
+} from "react";
+import { useForm } from "react-hook-form";
+import Swal from "sweetalert2";
+
+import Box from "@mui/material/Box";
+import Typography from "@mui/material/Typography";
+import Button from "@mui/material/Button";
+import Chip from "@mui/material/Chip";
+import Accordion from "@mui/material/Accordion";
+import AccordionSummary from "@mui/material/AccordionSummary";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import IconButton from "@mui/material/IconButton";
+
+import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import SchoolRoundedIcon from "@mui/icons-material/SchoolRounded";
+import LibraryBooksRoundedIcon from "@mui/icons-material/LibraryBooksRounded";
+import BookmarkRoundedIcon from "@mui/icons-material/BookmarkRounded";
+import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
+import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
+import MenuBookRoundedIcon from "@mui/icons-material/MenuBookRounded";
+import MenuRoundedIcon from "@mui/icons-material/MenuRounded";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
+import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
+import HelpOutlineRoundedIcon from "@mui/icons-material/HelpOutlineRounded";
+import AutoStoriesRoundedIcon from "@mui/icons-material/AutoStoriesRounded";
+import PhoneIphoneRoundedIcon from "@mui/icons-material/PhoneIphoneRounded";
+import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import MenuBookOutlinedIcon from "@mui/icons-material/MenuBookOutlined";
+import TouchAppRoundedIcon from "@mui/icons-material/TouchAppRounded";
+import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
+import EmailRoundedIcon from "@mui/icons-material/EmailRounded";
+import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
+
+/*
+ * Gregg Dictionary Landing Page
+ *
+ * Required files inside /public:
+ *
+ * /icon.png
+ * /onboarding-search.png
+ * /onboarding-learn.png
+ * /onboarding-browse.png
+ * /onboarding-saved.png
+ * /app-preview.mp4
+ *
+ * Example:
+ *
+ * public/
+ * ├── icon.png
+ * ├── onboarding-search.png
+ * ├── onboarding-learn.png
+ * ├── onboarding-browse.png
+ * ├── onboarding-saved.png
+ * └── app-preview.mp4
+ */
+
+const APP_ICON = "/icon.png";
+const APP_VIDEO = "/app-preview.mp4";
+
+// The .apk lives in /public as "Gregg Dictionary.apk" — spaces are
+// URL-encoded in the href, but the visitor's downloaded file keeps
+// the readable name via the `download` attribute.
+const APP_DOWNLOAD_URL = "/Gregg%20Dictionary.apk";
+const APP_DOWNLOAD_FILENAME = "Gregg Dictionary.apk";
+
+// Free, no-signup hit counter (https://countapi.mileshilliard.com) used
+// to track and display real download counts across all visitors without
+// needing a backend of your own. The key just needs to be unique to this
+// app — swap this whole block out if you already have your own backend
+// and would rather record downloads there instead.
+const DOWNLOAD_COUNTER_API = "https://countapi.mileshilliard.com/api/v1";
+const DOWNLOAD_COUNTER_KEY = "gregg-shorthand-dictionary-apk-downloads-v1";
+
+// Get a free access key at https://web3forms.com and paste it here.
+const WEB3FORMS_ACCESS_KEY = "1f7b9bb3-d70d-49ed-908a-b1326d344706";
+
+const BRAND = "#3869E8";
+const BRAND_DARK = "#244FC4";
+const BRAND_DEEP = "#173B9E";
+const BRAND_LIGHT = "#EAF0FF";
+
+const TEXT = "#1E3157";
+const MUTED = "#7587A8";
+const BORDER = "#DCE5F6";
+const PAGE_BG = "#F5F8FF";
+
+const FEATURES = [
+  {
+    icon: SearchRoundedIcon,
+    title: "Search",
+    description: "Find any word and see its Gregg shorthand stroke instantly.",
+    image: "/onboarding-search.png",
+    label: "Find words instantly",
+  },
+  {
+    icon: SchoolRoundedIcon,
+    title: "Learn",
+    description:
+      "Study Gregg shorthand step by step using lessons based on the original manual.",
+    image: "/onboarding-learn.png",
+    label: "Learn step by step",
+  },
+  {
+    icon: LibraryBooksRoundedIcon,
+    title: "Browse",
+    description:
+      "Explore the complete dictionary letter by letter across the available series.",
+    image: "/onboarding-browse.png",
+    label: "Explore the dictionary",
+  },
+  {
+    icon: BookmarkRoundedIcon,
+    title: "Saved",
+    description:
+      "Save useful words and build your own personal shorthand study list.",
+    image: "/onboarding-saved.png",
+    label: "Keep your favorites",
+  },
+];
+
+const FAQS = [
+  {
+    question: "Is Gregg Dictionary free to use?",
+    answer:
+      "Yes. The dictionary and learning content can be browsed directly in the app.",
+  },
+  {
+    question:
+      "What's the difference between Simplified and Anniversary?",
+    answer:
+      "They are different editions of the Gregg shorthand system. The app keeps their word and stroke information organized separately.",
+  },
+  {
+    question: "Can I save words to study later?",
+    answer:
+      "Yes. Bookmark a word and it will appear in your Saved section so you can return to it later.",
+  },
+  {
+    question: "Does the app show the original printed pages?",
+    answer:
+      "Dictionary entries can be connected to the original scanned source pages used by the app.",
+  },
+];
+
+/* =========================================================
+   APP DOWNLOAD (context + progress bar + live counter)
+
+   Shared across the Nav buttons and the download-section
+   button so a single click drives one real download, one
+   progress bar, and one shared, realtime-ish download count.
+   ========================================================= */
+
+const DownloadContext = createContext(null);
+
+function useDownload() {
+  return useContext(DownloadContext);
+}
+
+function DownloadProvider({ children }) {
+  const [downloadCount, setDownloadCount] = useState(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchCount = async () => {
+      try {
+        const response = await fetch(
+          `${DOWNLOAD_COUNTER_API}/get/${DOWNLOAD_COUNTER_KEY}`
+        );
+        const data = await response.json();
+
+        if (!cancelled && typeof data.value === "number") {
+          setDownloadCount(data.value);
+        }
+      } catch (error) {
+        // The counter is a nice-to-have — fail silently.
+      }
+    };
+
+    fetchCount();
+
+    // Poll every 15s so downloads from other visitors show up
+    // without needing a page refresh.
+    const interval = setInterval(fetchCount, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const triggerDownload = async () => {
+    if (isDownloading) return;
+
+    setIsDownloading(true);
+    setProgress(0);
+
+    try {
+      const response = await fetch(APP_DOWNLOAD_URL);
+
+      if (!response.ok || !response.body) {
+        throw new Error("Download request failed");
+      }
+
+      const contentLength = response.headers.get("Content-Length");
+      const total = contentLength
+        ? parseInt(contentLength, 10)
+        : 0;
+
+      const reader = response.body.getReader();
+      const chunks = [];
+      let received = 0;
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        chunks.push(value);
+        received += value.length;
+
+        if (total) {
+          setProgress(
+            Math.min(99, Math.round((received / total) * 100))
+          );
+        } else {
+          // No Content-Length header to measure against — creep
+          // the bar forward so it still reads as "in progress".
+          setProgress((prev) => (prev < 90 ? prev + 3 : prev));
+        }
+      }
+
+      const blob = new Blob(chunks);
+      const blobUrl = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = APP_DOWNLOAD_FILENAME;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+
+      setProgress(100);
+
+      // Best-effort count increment — doesn't block success feedback.
+      fetch(`${DOWNLOAD_COUNTER_API}/hit/${DOWNLOAD_COUNTER_KEY}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (typeof data.value === "number") {
+            setDownloadCount(data.value);
+          }
+        })
+        .catch(() => {});
+
+      Swal.fire({
+        background: "#142653",
+        color: "#fff",
+        confirmButtonColor: BRAND,
+        icon: "success",
+        title: "Download complete!",
+        html:
+          '<span style="color:#22C55E; font-weight:800;">Gregg Dictionary</span> was downloaded successfully',
+        confirmButtonText: "Great",
+      });
+    } catch (error) {
+      Swal.fire({
+        background: "#142653",
+        color: "#fff",
+        confirmButtonColor: BRAND,
+        icon: "error",
+        title: "Download failed",
+        text: "Something went wrong while downloading the app. Please try again.",
+        confirmButtonText: "Okay",
+      });
+    } finally {
+      setIsDownloading(false);
+      setTimeout(() => setProgress(0), 500);
+    }
+  };
+
+  return (
+    <DownloadContext.Provider
+      value={{
+        downloadCount,
+        isDownloading,
+        progress,
+        triggerDownload,
+      }}
+    >
+      {children}
+    </DownloadContext.Provider>
+  );
+}
+
+function DownloadProgressBar() {
+  const { isDownloading, progress } = useDownload();
+
+  if (!isDownloading) return null;
+
+  return (
+    <Box
+      sx={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+
+        height: 3,
+
+        zIndex: 2000,
+
+        bgcolor: "rgba(56,105,232,.15)",
+      }}
+    >
+      <Box
+        sx={{
+          height: "100%",
+          width: `${progress}%`,
+
+          bgcolor: BRAND,
+
+          transition: "width .25s ease",
+
+          boxShadow: "0 0 10px rgba(56,105,232,.65)",
+        }}
+      />
+    </Box>
+  );
+}
+
+function DownloadCounter() {
+  const { downloadCount } = useDownload();
+
+  return (
+    <Box
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 1.1,
+
+        pl: 0.6,
+        pr: 1.75,
+        py: 0.6,
+
+        borderRadius: "999px",
+
+        bgcolor: "rgba(255,255,255,.07)",
+
+        border: "1px solid rgba(255,255,255,.14)",
+
+        backdropFilter: "blur(14px)",
+        WebkitBackdropFilter: "blur(14px)",
+
+        boxShadow: "0 10px 26px rgba(0,0,0,.28)",
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+
+          width: 32,
+          height: 32,
+          flexShrink: 0,
+
+          borderRadius: "50%",
+
+          background:
+            "linear-gradient(135deg, rgba(94,138,255,.5), rgba(56,105,232,.25))",
+        }}
+      >
+        <PhoneIphoneRoundedIcon
+          sx={{ fontSize: 16, color: "#CFDCFF" }}
+        />
+      </Box>
+
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 0.5,
+
+          whiteSpace: "nowrap",
+        }}
+      >
+        <Typography
+          sx={{
+            color: "#fff",
+            fontWeight: 850,
+            fontSize: 14.5,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          {downloadCount === null
+            ? "—"
+            : downloadCount.toLocaleString()}
+        </Typography>
+
+        <Typography
+          sx={{
+            color: "rgba(255,255,255,.55)",
+            fontSize: 11.5,
+            fontWeight: 650,
+            letterSpacing: "0.01em",
+          }}
+        >
+          downloads and counting
+        </Typography>
+      </Box>
+
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 0.6,
+
+          ml: 0.5,
+          pl: 1.35,
+
+          borderLeft: "1px solid rgba(255,255,255,.14)",
+        }}
+      >
+        <Box
+          sx={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+
+            bgcolor: "#22C55E",
+
+            animation: "greggDownloadPulse 1.8s infinite",
+
+            "@keyframes greggDownloadPulse": {
+              "0%": {
+                boxShadow: "0 0 0 0 rgba(34,197,94,.6)",
+              },
+              "70%": {
+                boxShadow: "0 0 0 8px rgba(34,197,94,0)",
+              },
+              "100%": {
+                boxShadow: "0 0 0 0 rgba(34,197,94,0)",
+              },
+            },
+          }}
+        />
+
+        <Typography
+          sx={{
+            color: "#8FE3A6",
+            fontSize: 10.5,
+            fontWeight: 800,
+            letterSpacing: "0.06em",
+          }}
+        >
+          LIVE
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
+export default function LandingPage() {
+  return (
+    <DownloadProvider>
+      <DownloadProgressBar />
+
+      <Box
+        sx={{
+          minHeight: "100vh",
+          bgcolor: PAGE_BG,
+          color: TEXT,
+          overflowX: "hidden",
+        }}
+      >
+        <Nav />
+
+        <main>
+          <Hero />
+          <Mission />
+          <Features />
+          <LearnSection />
+          <Faq />
+          <DownloadSection />
+        </main>
+
+        <Footer />
+      </Box>
+    </DownloadProvider>
+  );
+}
+
+/* =========================================================
+   NAVIGATION
+   ========================================================= */
+
+function Nav() {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const { triggerDownload, isDownloading } = useDownload();
+
+  const navItems = [
+    {
+      label: "Home",
+      id: "home",
+      icon: <HomeRoundedIcon sx={{ fontSize: 19 }} />,
+    },
+    {
+      label: "Features",
+      id: "features",
+      icon: <AutoStoriesRoundedIcon sx={{ fontSize: 19 }} />,
+    },
+    {
+      label: "Learn",
+      id: "learn",
+      icon: <SchoolRoundedIcon sx={{ fontSize: 19 }} />,
+    },
+    {
+      label: "FAQ",
+      id: "faq",
+      icon: <HelpOutlineRoundedIcon sx={{ fontSize: 19 }} />,
+    },
+  ];
+
+  const scrollTo = (id) => {
+    const target = document.getElementById(id);
+
+    if (target) {
+      target.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+
+    setMobileOpen(false);
+  };
+
+  return (
+    <Box
+      component="header"
+      sx={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 1200,
+
+        px: {
+          xs: 1.25,
+          sm: 2,
+          md: 3,
+        },
+
+        pt: {
+          xs: 1,
+          sm: 1.25,
+          md: 1.5,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 1180,
+          mx: "auto",
+
+          minHeight: {
+            xs: 62,
+            md: 70,
+          },
+
+          px: {
+            xs: 1.25,
+            sm: 1.75,
+            md: 2,
+            lg: 2.5,
+          },
+
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+
+          bgcolor: "rgba(255,255,255,0.94)",
+
+          backdropFilter: "blur(22px)",
+          WebkitBackdropFilter: "blur(22px)",
+
+          border:
+            "1px solid rgba(255,255,255,0.95)",
+
+          borderRadius: {
+            xs: "18px",
+            md: "21px",
+          },
+
+          boxShadow:
+            "0 12px 38px rgba(36,70,135,0.13)",
+        }}
+      >
+        {/* LOGO */}
+
+        <Box
+          onClick={() => scrollTo("home")}
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: {
+              xs: 0.8,
+              sm: 1,
+            },
+
+            cursor: "pointer",
+            minWidth: 0,
+          }}
+        >
+          <Box
+            component="img"
+            src={APP_ICON}
+            alt="Gregg Dictionary"
+            sx={{
+              width: {
+                xs: 39,
+                sm: 43,
+                md: 47,
+              },
+
+              height: {
+                xs: 39,
+                sm: 43,
+                md: 47,
+              },
+
+              objectFit: "contain",
+              flexShrink: 0,
+            }}
+          />
+
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              sx={{
+                fontWeight: 850,
+
+                fontSize: {
+                  xs: 14,
+                  sm: 16,
+                  md: 18,
+                },
+
+                letterSpacing: "-0.025em",
+
+                lineHeight: 1.1,
+
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              Gregg Dictionary
+            </Typography>
+
+            <Typography
+              sx={{
+                display: {
+                  xs: "none",
+                  sm: "block",
+                },
+
+                color: MUTED,
+
+                fontSize: {
+                  sm: 9,
+                  md: 10,
+                },
+
+                fontWeight: 700,
+
+                letterSpacing: "0.03em",
+              }}
+            >
+              AN OFFICE ADMINISTRATION DICTIONARY
+            </Typography>
+          </Box>
+        </Box>
+
+        {/* DESKTOP NAVIGATION
+            Hidden below lg.
+            Visible on laptop, desktop and wide screens.
+        */}
+
+        <Box
+          sx={{
+            display: {
+              xs: "none",
+              lg: "flex",
+            },
+
+            alignItems: "center",
+            gap: 0.25,
+          }}
+        >
+          {navItems.map((item) => (
+            <Button
+              key={item.id}
+              onClick={() => scrollTo(item.id)}
+              startIcon={item.icon}
+              sx={{
+                color: MUTED,
+
+                textTransform: "none",
+
+                fontWeight: 750,
+
+                fontSize: 13.5,
+
+                borderRadius: "12px",
+
+                px: 1.4,
+                py: 1.1,
+
+                minWidth: "auto",
+
+                "& .MuiButton-startIcon": {
+                  color: BRAND,
+                  marginRight: 0.55,
+                },
+
+                "&:hover": {
+                  bgcolor: BRAND_LIGHT,
+                  color: BRAND,
+                },
+              }}
+            >
+              {item.label}
+            </Button>
+          ))}
+
+          <Button
+            onClick={triggerDownload}
+            disabled={isDownloading}
+            variant="contained"
+            disableElevation
+            startIcon={
+              <DownloadRoundedIcon
+                sx={{ fontSize: 18 }}
+              />
+            }
+            sx={{
+              ml: 1,
+
+              bgcolor: BRAND,
+
+              color: "#fff",
+
+              textTransform: "none",
+
+              fontWeight: 800,
+
+              fontSize: 13.5,
+
+              borderRadius: "13px",
+
+              px: 2,
+
+              py: 1.15,
+
+              boxShadow:
+                "0 8px 20px rgba(56,105,232,.22)",
+
+              "&:hover": {
+                bgcolor: BRAND_DARK,
+                boxShadow:
+                  "0 10px 24px rgba(56,105,232,.28)",
+              },
+
+              "&.Mui-disabled": {
+                bgcolor: "rgba(56,105,232,.55)",
+                color: "rgba(255,255,255,.85)",
+              },
+            }}
+          >
+            {isDownloading ? "Downloading…" : "Get the app"}
+          </Button>
+        </Box>
+
+        {/* MOBILE / SMALL TABLET MENU */}
+
+        <IconButton
+          aria-label={
+            mobileOpen
+              ? "Close navigation"
+              : "Open navigation"
+          }
+          onClick={() => setMobileOpen((v) => !v)}
+          sx={{
+            display: {
+              xs: "flex",
+              lg: "none",
+            },
+
+            width: 43,
+            height: 43,
+
+            borderRadius: "13px",
+
+            color: BRAND,
+
+            bgcolor: BRAND_LIGHT,
+
+            "&:hover": {
+              bgcolor: "#DCE7FF",
+            },
+          }}
+        >
+          {mobileOpen ? (
+            <CloseRoundedIcon />
+          ) : (
+            <MenuRoundedIcon />
+          )}
+        </IconButton>
+      </Box>
+
+      {/* MOBILE MENU */}
+
+      {mobileOpen && (
+        <Box
+          sx={{
+            display: {
+              xs: "block",
+              lg: "none",
+            },
+
+            width: "100%",
+            maxWidth: 1180,
+
+            mx: "auto",
+
+            mt: 1,
+
+            p: 1,
+
+            bgcolor: "rgba(255,255,255,.98)",
+
+            backdropFilter: "blur(22px)",
+            WebkitBackdropFilter: "blur(22px)",
+
+            border:
+              "1px solid rgba(255,255,255,.95)",
+
+            borderRadius: "18px",
+
+            boxShadow:
+              "0 18px 45px rgba(36,70,135,.16)",
+          }}
+        >
+          {navItems.map((item) => (
+            <Button
+              key={item.id}
+              fullWidth
+              startIcon={item.icon}
+              onClick={() => scrollTo(item.id)}
+              sx={{
+                justifyContent: "flex-start",
+
+                textTransform: "none",
+
+                color: TEXT,
+
+                fontWeight: 750,
+
+                borderRadius: "12px",
+
+                py: 1.35,
+
+                px: 1.5,
+
+                "& .MuiButton-startIcon": {
+                  color: BRAND,
+                },
+
+                "&:hover": {
+                  bgcolor: BRAND_LIGHT,
+                  color: BRAND,
+                },
+              }}
+            >
+              {item.label}
+            </Button>
+          ))}
+
+          <Button
+            fullWidth
+            disabled={isDownloading}
+            variant="contained"
+            disableElevation
+            startIcon={<DownloadRoundedIcon />}
+            onClick={() => {
+              triggerDownload();
+              setMobileOpen(false);
+            }}
+            sx={{
+              mt: 0.5,
+
+              bgcolor: BRAND,
+
+              textTransform: "none",
+
+              fontWeight: 800,
+
+              borderRadius: "12px",
+
+              py: 1.35,
+
+              "&:hover": {
+                bgcolor: BRAND_DARK,
+              },
+
+              "&.Mui-disabled": {
+                bgcolor: "rgba(56,105,232,.55)",
+                color: "rgba(255,255,255,.85)",
+              },
+            }}
+          >
+            {isDownloading ? "Downloading…" : "Get the app"}
+          </Button>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+/* =========================================================
+   HERO
+   ========================================================= */
+
+function Hero() {
+  return (
+    <Box
+      id="home"
+      sx={{
+        position: "relative",
+
+        bgcolor: "#0B1130",
+
+        pt: {
+          xs: 13,
+          sm: 14,
+          md: 15,
+        },
+
+        pb: {
+          xs: 6,
+          sm: 8,
+          md: 10,
+        },
+
+        overflow: "hidden",
+
+        scrollMarginTop: 100,
+      }}
+    >
+      {/* BACKGROUND GLOW ORBS */}
+
+      <Box
+        sx={{
+          position: "absolute",
+
+          width: {
+            xs: 340,
+            md: 620,
+          },
+
+          height: {
+            xs: 340,
+            md: 620,
+          },
+
+          borderRadius: "50%",
+
+          background:
+            "radial-gradient(circle at 35% 30%, rgba(94,138,255,0.55) 0%, rgba(36,79,196,0.18) 55%, transparent 75%)",
+
+          top: {
+            xs: -120,
+            md: -160,
+          },
+
+          right: {
+            xs: -160,
+            md: -180,
+          },
+
+          pointerEvents: "none",
+        }}
+      />
+
+      <Box
+        sx={{
+          position: "absolute",
+
+          width: {
+            xs: 240,
+            md: 420,
+          },
+
+          height: {
+            xs: 240,
+            md: 420,
+          },
+
+          borderRadius: "50%",
+
+          border: "1px solid rgba(150,180,255,0.18)",
+
+          top: {
+            xs: 20,
+            md: 40,
+          },
+
+          right: {
+            xs: -60,
+            md: -40,
+          },
+
+          pointerEvents: "none",
+        }}
+      />
+
+      <Box
+        sx={{
+          position: "absolute",
+
+          width: {
+            xs: 160,
+            md: 260,
+          },
+
+          height: {
+            xs: 160,
+            md: 260,
+          },
+
+          borderRadius: "50%",
+
+          bgcolor: "rgba(20,30,70,0.5)",
+
+          filter: "blur(40px)",
+
+          bottom: {
+            xs: -60,
+            md: -80,
+          },
+
+          left: {
+            xs: -60,
+            md: -40,
+          },
+
+          pointerEvents: "none",
+        }}
+      />
+
+      <Box
+        component="svg"
+        viewBox="0 0 400 200"
+        sx={{
+          position: "absolute",
+
+          width: { xs: 260, md: 380 },
+          height: "auto",
+
+          bottom: { xs: -30, md: -20 },
+          left: { xs: -40, md: -20 },
+
+          opacity: 0.25,
+
+          pointerEvents: "none",
+        }}
+      >
+        <path
+          d="M0 150 C 80 120, 160 180, 400 90"
+          fill="none"
+          stroke="rgba(120,150,255,0.5)"
+          strokeWidth="1"
+        />
+        <path
+          d="M0 175 C 90 150, 170 200, 400 115"
+          fill="none"
+          stroke="rgba(120,150,255,0.35)"
+          strokeWidth="1"
+        />
+      </Box>
+
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 1180,
+          mx: "auto",
+
+          px: {
+            xs: 2,
+            sm: 3,
+            md: 4,
+          },
+
+          position: "relative",
+          zIndex: 1,
+
+          display: "grid",
+
+          gridTemplateColumns: {
+            xs: "1fr",
+            md: "1fr 1fr",
+          },
+
+          alignItems: "center",
+
+          gap: {
+            xs: 5,
+            md: 7,
+          },
+        }}
+      >
+        {/* HERO COPY */}
+
+        <Box>
+          <Chip
+            icon={
+              <MenuBookOutlinedIcon
+                sx={{ fontSize: 17 }}
+              />
+            }
+            label="Gregg Shorthand Dictionary"
+            sx={{
+              bgcolor: BRAND_LIGHT,
+              color: BRAND_DARK,
+
+              fontWeight: 800,
+
+              borderRadius: "10px",
+
+              mb: 2.25,
+
+              "& .MuiChip-icon": {
+                color: BRAND,
+              },
+            }}
+          />
+
+          <Typography
+            component="h1"
+            sx={{
+              fontWeight: 900,
+
+              letterSpacing: "-0.045em",
+
+              fontSize: {
+                xs: 39,
+                sm: 48,
+                md: 56,
+                lg: 64,
+              },
+
+              lineHeight: {
+                xs: 1.08,
+                md: 1.04,
+              },
+
+              color: "#fff",
+
+              maxWidth: 650,
+
+              mb: 2.5,
+            }}
+          >
+            Learn Gregg shorthand,
+            <Box
+              component="span"
+              sx={{
+                display: "block",
+                color: BRAND,
+              }}
+            >
+              one word at a time.
+            </Box>
+          </Typography>
+
+          <Typography
+            sx={{
+              color: MUTED,
+
+              fontSize: {
+                xs: 16,
+                md: 18,
+              },
+
+              lineHeight: 1.7,
+
+              maxWidth: 540,
+
+              mb: 3.25,
+            }}
+          >
+            Search, browse, learn, and save Gregg
+            shorthand across Simplified and Anniversary
+            editions — all in one modern dictionary app.
+          </Typography>
+
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1.5,
+              flexWrap: "wrap",
+            }}
+          >
+            <Button
+              variant="contained"
+              disableElevation
+              size="large"
+              onClick={() =>
+                document
+                  .getElementById("features")
+                  ?.scrollIntoView({
+                    behavior: "smooth",
+                  })
+              }
+              endIcon={
+                <ArrowForwardRoundedIcon />
+              }
+              sx={{
+                bgcolor: BRAND,
+
+                textTransform: "none",
+
+                fontWeight: 850,
+
+                borderRadius: "14px",
+
+                px: 2.7,
+                py: 1.5,
+
+                boxShadow:
+                  "0 10px 24px rgba(56,105,232,.24)",
+
+                "&:hover": {
+                  bgcolor: BRAND_DARK,
+
+                  transform: "translateY(-2px)",
+
+                  boxShadow:
+                    "0 14px 28px rgba(56,105,232,.3)",
+                },
+
+                transition:
+                  "all .25s ease",
+              }}
+            >
+              Explore the app
+            </Button>
+
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                px: 1.5,
+                py: 1,
+
+                borderRadius: "12px",
+
+                bgcolor: "#fff",
+
+                border:
+                  `1px solid ${BORDER}`,
+              }}
+            >
+              <CheckCircleRoundedIcon
+                sx={{
+                  color: BRAND,
+                  fontSize: 19,
+                }}
+              />
+
+              <Typography
+                sx={{
+                  fontWeight: 750,
+                  color: MUTED,
+                  fontSize: 13,
+                }}
+              >
+                Simplified + Anniversary
+              </Typography>
+            </Box>
+          </Box>
+
+          <Box sx={{ mt: 3 }}>
+            <DownloadCounter />
+          </Box>
+        </Box>
+
+        {/* HERO VIDEO */}
+
+        <HeroVideo />
+      </Box>
+    </Box>
+  );
+}
+
+function HeroVideo() {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+
+    const playVideo = () => {
+      const promise = video.play();
+      if (promise !== undefined) {
+        promise.catch(() => {
+          // Browser blocked autoplay; muted autoplay will be retried on load/canplay.
+        });
+      }
+    };
+
+    video.addEventListener("loadedmetadata", playVideo);
+    video.addEventListener("canplay", playVideo);
+    playVideo();
+
+    return () => {
+      video.removeEventListener("loadedmetadata", playVideo);
+      video.removeEventListener("canplay", playVideo);
+    };
+  }, []);
+
+  return (
+    <Box
+      sx={{
+        position: "relative",
+
+        width: "100%",
+
+        maxWidth: {
+          xs: 430,
+          md: 560,
+        },
+
+        mx: {
+          xs: "auto",
+          md: 0,
+        },
+
+        justifySelf: {
+          xs: "center",
+          md: "end",
+        },
+      }}
+    >
+      {/* Decorative glow */}
+
+      <Box
+        sx={{
+          position: "absolute",
+
+          inset: {
+            xs: 15,
+            md: 25,
+          },
+
+          bgcolor: BRAND,
+
+          borderRadius: "38px",
+
+          filter: "blur(45px)",
+
+          opacity: 0.22,
+
+          transform: "translateY(15px)",
+
+          zIndex: 0,
+        }}
+      />
+
+      {/* APP PREVIEW LABEL */}
+
+      <Box
+        sx={{
+          position: "absolute",
+
+          zIndex: 2,
+
+          top: {
+            xs: 8,
+            sm: 12,
+            md: 18,
+          },
+
+          left: "50%",
+          top: "-5%",
+          transform: "translateX(-50%)",
+
+          display: "flex",
+          alignItems: "center",
+          gap: 0.75,
+
+          px: 1.2,
+          py: 0.75,
+
+          borderRadius: "10px",
+
+          bgcolor: "rgba(8,25,72,.72)",
+
+          backdropFilter: "blur(10px)",
+
+          color: "#fff",
+        }}
+      >
+        <Box
+          sx={{
+            width: 7,
+            height: 7,
+            borderRadius: "50%",
+            bgcolor: "#61E294",
+          }}
+        />
+
+        <Typography
+          sx={{
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: ".03em",
+          }}
+        >
+          APP PREVIEW
+        </Typography>
+      </Box>
+
+      {/* SLIDESHOW FRAME */}
+
+      <Box
+        sx={{
+          position: "relative",
+
+          zIndex: 1,
+
+          width: "fit-content",
+
+          mx: "auto",
+
+          p: {
+            xs: 1.1,
+            sm: 1.1,
+            md: 1.1,
+          },
+
+          borderRadius: {
+            xs: "29px",
+            md: "36px",
+          },
+
+          background:
+            "linear-gradient(145deg, #4C7BF0 0%, #244FC4 100%)",
+
+          boxShadow:
+            "0 28px 65px rgba(32,67,145,.25)",
+        }}
+      >
+        <Box
+          sx={{
+            position: "relative",
+
+            bgcolor: "#071B52",
+
+            borderRadius: {
+              xs: "23px",
+              md: "29px",
+            },
+
+            overflow: "hidden",
+
+            height: {
+              xs: 400,
+              sm: 440,
+              md: 500,
+            },
+
+            aspectRatio: "9 / 20",
+
+            p: {
+              xs: 1.75,
+              sm: 2.1,
+              md: 2.5,
+            },
+          }}
+        >
+          <Box
+            component="video"
+            ref={videoRef}
+            src={APP_VIDEO}
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            aria-label="Gregg Dictionary app preview"
+            sx={{
+              position: "absolute",
+              inset: 0,
+
+              width: "100%",
+              height: "100%",
+
+              objectFit: "contain",
+              objectPosition: "top center",
+            }}
+          />
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
+   MISSION
+   ========================================================= */
+
+function Mission() {
+  return (
+    <Box
+      sx={{
+        position: "relative",
+
+        py: {
+          xs: 7,
+          md: 10,
+        },
+
+        textAlign: "center",
+
+        scrollMarginTop: 100,
+      }}
+    >
+      <Chip
+        icon={
+          <TouchAppRoundedIcon
+            sx={{ fontSize: 17 }}
+          />
+        }
+        label="Simple by design"
+        sx={{
+          bgcolor: "#fff",
+
+          color: BRAND,
+
+          fontWeight: 800,
+
+          border:
+            `1px solid ${BORDER}`,
+
+          mb: 2,
+        }}
+      />
+
+      <Typography
+        component="h2"
+        sx={{
+          fontWeight: 900,
+
+          letterSpacing: "-0.035em",
+
+          fontSize: {
+            xs: 30,
+            sm: 36,
+            md: 44,
+          },
+
+          lineHeight: 1.15,
+
+          color: TEXT,
+
+          mb: 1.7,
+        }}
+      >
+        Everything you need to
+        <Box
+          component="span"
+          sx={{
+            color: BRAND,
+            ml: { sm: 1 },
+          }}
+        >
+          learn shorthand.
+        </Box>
+      </Typography>
+
+      <Typography
+        sx={{
+          color: MUTED,
+
+          maxWidth: 630,
+
+          mx: "auto",
+
+          fontSize: {
+            xs: 15,
+            md: 17,
+          },
+
+          lineHeight: 1.75,
+        }}
+      >
+        Real strokes, useful definitions, original
+        learning material, and a focused study
+        experience — without the clutter of a printed
+        manual.
+      </Typography>
+    </Box>
+  );
+}
+
+/* =========================================================
+   FEATURES / ONBOARDING IMAGES
+   ========================================================= */
+
+function Features() {
+  return (
+    <Box
+      id="features"
+      sx={{
+        scrollMarginTop: 100,
+
+        pb: {
+          xs: 8,
+          md: 11,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          textAlign: "center",
+          mb: 4.5,
+        }}
+      >
+        <Typography
+          sx={{
+            color: BRAND,
+
+            fontSize: 12,
+
+            fontWeight: 900,
+
+            letterSpacing: ".12em",
+
+            textTransform: "uppercase",
+
+            mb: 1,
+          }}
+        >
+          SEE WHAT MAKES IT USEFUL
+        </Typography>
+
+        <Typography
+          component="h2"
+          sx={{
+            color: TEXT,
+
+            fontWeight: 900,
+
+            letterSpacing: "-0.035em",
+
+            fontSize: {
+              xs: 29,
+              sm: 36,
+              md: 42,
+            },
+          }}
+        >
+          Four tools. One complete
+          <Box
+            component="span"
+            sx={{ color: BRAND, ml: 1 }}
+          >
+            study experience.
+          </Box>
+        </Typography>
+      </Box>
+
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 1180,
+
+          mx: "auto",
+
+          display: "grid",
+
+          gridTemplateColumns: {
+            xs: "1fr",
+            sm: "1fr 1fr",
+          },
+
+          gap: {
+            xs: 3,
+            md: 4,
+          },
+        }}
+      >
+        {FEATURES.map((feature, index) => (
+          <FeatureCard
+            key={feature.title}
+            feature={feature}
+            index={index}
+          />
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
+function FeatureCard({ feature, index }) {
+  const Icon = feature.icon;
+
+  const isBlue = index === 1;
+
+  return (
+    <Box
+      sx={{
+        position: "relative",
+
+        overflow: "hidden",
+
+        borderRadius: {
+          xs: "26px",
+          md: "30px",
+        },
+
+        border:
+          `1px solid ${isBlue ? "transparent" : BORDER}`,
+
+        bgcolor: isBlue ? BRAND : "#fff",
+
+        boxShadow:
+          isBlue
+            ? "0 20px 45px rgba(56,105,232,.2)"
+            : "0 14px 35px rgba(42,71,130,.07)",
+
+        transition:
+          "transform .3s ease, box-shadow .3s ease",
+
+        "&:hover": {
+          transform: "translateY(-7px)",
+
+          boxShadow:
+            isBlue
+              ? "0 28px 55px rgba(56,105,232,.26)"
+              : "0 22px 45px rgba(42,71,130,.13)",
+        },
+      }}
+    >
+      {/* CARD TEXT */}
+
+      <Box
+        sx={{
+          position: "relative",
+          zIndex: 2,
+
+          p: {
+            xs: 2.5,
+            sm: 3,
+            md: 3.25,
+          },
+
+          pb: 2,
+        }}
+      >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+          }}
+        >
+          <Box
+            sx={{
+              width: 45,
+              height: 45,
+
+              flexShrink: 0,
+
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+
+              borderRadius: "14px",
+
+              bgcolor: isBlue
+                ? "rgba(255,255,255,.16)"
+                : BRAND_LIGHT,
+
+              color: isBlue
+                ? "#fff"
+                : BRAND,
+            }}
+          >
+            <Icon sx={{ fontSize: 24 }} />
+          </Box>
+
+          <Box>
+            <Typography
+              sx={{
+                color: isBlue
+                  ? "#fff"
+                  : TEXT,
+
+                fontSize: 12,
+
+                fontWeight: 850,
+
+                letterSpacing: ".07em",
+
+                textTransform: "uppercase",
+
+                opacity: isBlue ? 0.75 : 0.6,
+
+                mb: 0.2,
+              }}
+            >
+              {feature.label}
+            </Typography>
+
+            <Typography
+              component="h3"
+              sx={{
+                color: isBlue
+                  ? "#fff"
+                  : TEXT,
+
+                fontWeight: 900,
+
+                fontSize: 24,
+
+                lineHeight: 1.15,
+              }}
+            >
+              {feature.title}
+            </Typography>
+          </Box>
+        </Box>
+
+        <Typography
+          sx={{
+            color: isBlue
+              ? "rgba(255,255,255,.78)"
+              : MUTED,
+
+            fontSize: 14,
+
+            lineHeight: 1.65,
+
+            mt: 1.5,
+
+            maxWidth: 450,
+          }}
+        >
+          {feature.description}
+        </Typography>
+      </Box>
+
+      {/* SCREENSHOT AREA */}
+
+      <Box
+        sx={{
+          position: "relative",
+
+          mx: {
+            xs: 1.5,
+            sm: 2,
+            md: 2.5,
+          },
+
+          mt: 1,
+
+          px: {
+            xs: 1.5,
+            sm: 2,
+            md: 2.5,
+          },
+
+          pt: {
+            xs: 2,
+            md: 2.5,
+          },
+
+          pb: 0,
+
+          display: "flex",
+
+          justifyContent: "center",
+
+          alignItems: "flex-end",
+
+          borderRadius:
+            "24px 24px 0 0",
+
+          bgcolor: isBlue
+            ? "rgba(255,255,255,.11)"
+            : "#F0F4FC",
+
+          border:
+            isBlue
+              ? "1px solid rgba(255,255,255,.12)"
+              : `1px solid ${BORDER}`,
+
+          borderBottom: 0,
+
+          overflow: "hidden",
+
+          /*
+           * NO FIXED HEIGHT.
+           *
+           * The image itself determines the height.
+           * This prevents portrait screenshots from
+           * being stretched or cropped.
+           */
+        }}
+      >
+        <Box
+          component="img"
+          src={feature.image}
+          alt={`${feature.title} screen in Gregg Dictionary`}
+          loading="lazy"
+          sx={{
+            display: "block",
+
+            /*
+             * KEEP ORIGINAL IMAGE RATIO.
+             */
+            width: "100%",
+            height: "auto",
+
+            maxWidth: {
+              xs: "100%",
+              sm: "92%",
+              md: "88%",
+            },
+
+            objectFit: "contain",
+
+            objectPosition: "bottom center",
+
+            borderRadius:
+              "18px 18px 0 0",
+
+            bgcolor: "#EEF3FC",
+
+            boxShadow:
+              "0 14px 35px rgba(31,55,105,.16)",
+
+            /*
+             * No transform scaling that can distort
+             * the actual screenshot.
+             */
+          }}
+        />
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
+   LEARN SECTION
+   ========================================================= */
+
+function LearnSection() {
+  return (
+    <Box
+      id="learn"
+      sx={{
+        scrollMarginTop: 100,
+
+        pb: {
+          xs: 8,
+          md: 11,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: "100%",
+
+          borderRadius: {
+            xs: "26px",
+            md: "34px",
+          },
+
+          overflow: "hidden",
+
+          background:
+            "linear-gradient(135deg, #EEF3FF 0%, #E3ECFF 100%)",
+
+          border:
+            `1px solid ${BORDER}`,
+
+          display: "grid",
+
+          gridTemplateColumns: {
+            xs: "1fr",
+            md: "1fr 1fr",
+          },
+
+          alignItems: "center",
+
+          gap: {
+            xs: 4,
+            md: 6,
+          },
+
+          p: {
+            xs: 3,
+            sm: 4,
+            md: 6,
+          },
+        }}
+      >
+        <Box>
+          <Chip
+            icon={
+              <SchoolRoundedIcon
+                sx={{ fontSize: 17 }}
+              />
+            }
+            label="Learn Gregg"
+            sx={{
+              bgcolor: "#fff",
+
+              color: BRAND,
+
+              fontWeight: 850,
+
+              mb: 2,
+            }}
+          />
+
+          <Typography
+            component="h2"
+            sx={{
+              color: TEXT,
+
+              fontWeight: 900,
+
+              letterSpacing: "-0.035em",
+
+              fontSize: {
+                xs: 30,
+                md: 42,
+              },
+
+              lineHeight: 1.12,
+
+              mb: 1.75,
+            }}
+          >
+            Start with the basics.
+            <Box
+              component="span"
+              sx={{
+                display: "block",
+                color: BRAND,
+              }}
+            >
+              Build from there.
+            </Box>
+          </Typography>
+
+          <Typography
+            sx={{
+              color: MUTED,
+
+              lineHeight: 1.75,
+
+              fontSize: 15,
+
+              maxWidth: 500,
+
+              mb: 2.5,
+            }}
+          >
+            Follow a structured learning path through
+            the history, alphabet, and lessons of Gregg
+            shorthand.
+          </Typography>
+
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 1.1,
+            }}
+          >
+            {[
+              "History and introduction",
+              "The Gregg alphabet",
+              "Step-by-step lessons",
+              "Original learning material",
+              "Simplified and Anniversary version dictionary",
+            ].map((item) => (
+              <Box
+                key={item}
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 1,
+
+                  color: TEXT,
+
+                  fontWeight: 700,
+
+                  fontSize: 13.5,
+                }}
+              >
+                <CheckCircleRoundedIcon
+                  sx={{
+                    color: BRAND,
+                    fontSize: 19,
+                  }}
+                />
+
+                {item}
+              </Box>
+            ))}
+          </Box>
+        </Box>
+
+        {/* LEARNING VISUAL */}
+
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "center",
+          }}
+        >
+          <Box
+            sx={{
+              width: "100%",
+              maxWidth: 420,
+
+              p: {
+                xs: 2,
+                md: 2.5,
+              },
+
+              borderRadius: "28px",
+
+              bgcolor: "#fff",
+
+              boxShadow:
+                "0 20px 45px rgba(39,68,135,.12)",
+            }}
+          >
+            <Box
+              sx={{
+                borderRadius: "21px",
+
+                bgcolor: "#F4F7FD",
+
+                border:
+                  `1px solid ${BORDER}`,
+
+                p: 2,
+              }}
+            >
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 1,
+
+                  mb: 2,
+                }}
+              >
+                <Box
+                  sx={{
+                    width: 40,
+                    height: 40,
+
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+
+                    borderRadius: "13px",
+
+                    bgcolor: BRAND_LIGHT,
+
+                    color: BRAND,
+                  }}
+                >
+                  <SchoolRoundedIcon />
+                </Box>
+
+                <Box>
+                  <Typography
+                    sx={{
+                      fontWeight: 850,
+                      fontSize: 15,
+                    }}
+                  >
+                    Learn Gregg
+                  </Typography>
+
+                  <Typography
+                    sx={{
+                      color: MUTED,
+                      fontSize: 11,
+                    }}
+                  >
+                    Structured lessons
+                  </Typography>
+                </Box>
+              </Box>
+
+              {[
+                "About Gregg Shorthand",
+                "A Talk with the Beginner",
+                "The Alphabet",
+                "First Lesson",
+                "Second Lesson",
+                "And many more...",
+              ].map((lesson, index) => (
+                <Box
+                  key={lesson}
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1.2,
+
+                    py: 1.25,
+
+                    borderTop:
+                      index === 0
+                        ? "none"
+                        : `1px solid ${BORDER}`,
+                  }}
+                >
+                  <Box
+                    sx={{
+                      width: 28,
+                      height: 28,
+
+                      borderRadius: "9px",
+
+                      bgcolor:
+                        index === 0
+                          ? BRAND
+                          : BRAND_LIGHT,
+
+                      color:
+                        index === 0
+                          ? "#fff"
+                          : BRAND,
+
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+
+                      fontSize: 11,
+
+                      fontWeight: 850,
+                    }}
+                  >
+                    {index + 1}
+                  </Box>
+
+                  <Typography
+                    sx={{
+                      fontSize: 12.5,
+
+                      fontWeight:
+                        index === 0
+                          ? 800
+                          : 650,
+
+                      color: TEXT,
+                    }}
+                  >
+                    {lesson}
+                  </Typography>
+
+                  <ArrowForwardRoundedIcon
+                    sx={{
+                      ml: "auto",
+                      color: MUTED,
+                      fontSize: 17,
+                    }}
+                  />
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
+   FAQ
+   ========================================================= */
+
+function Faq() {
+  return (
+    <Box
+      id="faq"
+      sx={{
+        pb: {
+          xs: 8,
+          md: 10,
+        },
+
+        scrollMarginTop: 100,
+      }}
+    >
+      <Box
+        sx={{
+          textAlign: "center",
+          mb: 4,
+        }}
+      >
+        <Chip
+          icon={
+            <HelpOutlineRoundedIcon
+              sx={{ fontSize: 17 }}
+            />
+          }
+          label="FAQs"
+          sx={{
+            bgcolor: "#fff",
+
+            color: BRAND,
+
+            fontWeight: 850,
+
+            border:
+              `1px solid ${BORDER}`,
+
+            mb: 1.75,
+          }}
+        />
+
+        <Typography
+          component="h2"
+          sx={{
+            fontWeight: 900,
+
+            color: TEXT,
+
+            letterSpacing: "-0.035em",
+
+            fontSize: {
+              xs: 30,
+              md: 40,
+            },
+          }}
+        >
+          Frequently asked questions
+        </Typography>
+      </Box>
+
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 800,
+          mx: "auto",
+        }}
+      >
+        {FAQS.map(
+          ({ question, answer }) => (
+            <Accordion
+              key={question}
+              disableGutters
+              elevation={0}
+              sx={{
+                bgcolor: "#fff",
+
+                border:
+                  `1px solid ${BORDER}`,
+
+                borderRadius:
+                  "16px !important",
+
+                mb: 1.2,
+
+                overflow: "hidden",
+
+                "&:before": {
+                  display: "none",
+                },
+
+                "&.Mui-expanded": {
+                  marginBottom: 1.2,
+                },
+              }}
+            >
+              <AccordionSummary
+                expandIcon={
+                  <ExpandMoreRoundedIcon
+                    sx={{ color: BRAND }}
+                  />
+                }
+                sx={{
+                  minHeight: 62,
+
+                  px: {
+                    xs: 2,
+                    sm: 2.5,
+                  },
+
+                  "&.Mui-expanded": {
+                    minHeight: 62,
+                  },
+
+                  "& .MuiAccordionSummary-content":
+                    {
+                      my: 1.5,
+                    },
+
+                  "& .MuiAccordionSummary-content.Mui-expanded":
+                    {
+                      my: 1.5,
+                    },
+                }}
+              >
+                <Typography
+                  sx={{
+                    fontWeight: 800,
+
+                    color: TEXT,
+
+                    fontSize: 14,
+                  }}
+                >
+                  {question}
+                </Typography>
+              </AccordionSummary>
+
+              <AccordionDetails
+                sx={{
+                  px: {
+                    xs: 2,
+                    sm: 2.5,
+                  },
+
+                  pt: 0,
+
+                  pb: 2.25,
+                }}
+              >
+                <Typography
+                  sx={{
+                    color: MUTED,
+
+                    lineHeight: 1.7,
+
+                    fontSize: 14,
+                  }}
+                >
+                  {answer}
+                </Typography>
+              </AccordionDetails>
+            </Accordion>
+          )
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
+   DOWNLOAD CTA
+   ========================================================= */
+
+function DownloadSection() {
+  const { triggerDownload, isDownloading } = useDownload();
+
+  return (
+    <Box
+      id="download"
+      sx={{
+        scrollMarginTop: 100,
+
+        pb: {
+          xs: 8,
+          md: 10,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          position: "relative",
+
+          overflow: "hidden",
+
+          borderRadius: {
+            xs: "27px",
+            md: "34px",
+          },
+
+          bgcolor: BRAND,
+
+          color: "#fff",
+
+          px: {
+            xs: 3,
+            sm: 5,
+            md: 7,
+          },
+
+          py: {
+            xs: 4,
+            md: 5.5,
+          },
+
+          textAlign: "center",
+
+          boxShadow:
+            "0 22px 55px rgba(56,105,232,.22)",
+        }}
+      >
+        {/* Decorative circles */}
+
+        <Box
+          sx={{
+            position: "absolute",
+
+            width: 250,
+            height: 250,
+
+            borderRadius: "50%",
+
+            bgcolor:
+              "rgba(255,255,255,.08)",
+
+            top: -130,
+            left: -80,
+          }}
+        />
+
+        <Box
+          sx={{
+            position: "absolute",
+
+            width: 300,
+            height: 300,
+
+            borderRadius: "50%",
+
+            bgcolor:
+              "rgba(255,255,255,.06)",
+
+            bottom: -190,
+            right: -80,
+          }}
+        />
+
+        <Box
+          sx={{
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
+          <Box
+            component="img"
+            src={APP_ICON}
+            alt="Gregg Dictionary"
+            sx={{
+              width: 62,
+              height: 62,
+
+              objectFit: "contain",
+
+              mb: 1.5,
+            }}
+          />
+
+          <Typography
+            component="h2"
+            sx={{
+              fontWeight: 900,
+
+              letterSpacing: "-0.035em",
+
+              fontSize: {
+                xs: 29,
+                md: 40,
+              },
+
+              mb: 1,
+            }}
+          >
+            Ready to explore Gregg shorthand?
+          </Typography>
+
+          <Typography
+            sx={{
+              color:
+                "rgba(255,255,255,.76)",
+
+              maxWidth: 570,
+
+              mx: "auto",
+
+              lineHeight: 1.7,
+
+              fontSize: 14.5,
+
+              mb: 2.75,
+            }}
+          >
+            Keep the dictionary, lessons, and saved
+            words within reach wherever you study.
+          </Typography>
+
+          <Box>
+            <Button
+              onClick={triggerDownload}
+              disabled={isDownloading}
+              variant="contained"
+              disableElevation
+              startIcon={
+                <DownloadRoundedIcon />
+              }
+              sx={{
+                bgcolor: "#fff",
+
+                color: BRAND,
+
+                textTransform: "none",
+
+                fontWeight: 850,
+
+                borderRadius: "13px",
+
+                px: 2.8,
+                py: 1.45,
+
+                "&:hover": {
+                  bgcolor: "#F2F5FF",
+
+                  transform:
+                    "translateY(-2px)",
+                },
+
+                transition:
+                  "all .2s ease",
+
+                "&.Mui-disabled": {
+                  bgcolor: "rgba(255,255,255,.6)",
+                  color: "rgba(56,105,232,.6)",
+                },
+              }}
+            >
+              {isDownloading
+                ? "Downloading…"
+                : "Get Gregg Dictionary"}
+            </Button>
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
+   FOOTER
+   ========================================================= */
+
+function Footer() {
+  const scrollTo = (id) => {
+    document
+      .getElementById(id)
+      ?.scrollIntoView({
+        behavior: "smooth",
+      });
+  };
+
+  return (
+    <Box
+      component="footer"
+      sx={{
+        bgcolor: "#142653",
+
+        color: "#fff",
+
+        pt: {
+          xs: 6,
+          md: 8,
+        },
+
+        pb: 3,
+
+        px: {
+          xs: 2.5,
+          sm: 3,
+          md: 4,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 1180,
+          mx: "auto",
+        }}
+      >
+        <Box
+          sx={{
+            display: "grid",
+
+            gridTemplateColumns: {
+              xs: "1fr",
+              sm: "1.5fr 1fr",
+              md: "2fr 1fr 1fr 2fr",
+            },
+
+            gap: {
+              xs: 4,
+              md: 5,
+            },
+
+            pb: 5,
+
+            borderBottom:
+              "1px solid rgba(255,255,255,.1)",
+          }}
+        >
+          {/* BRAND */}
+
+          <Box>
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1.2,
+
+                mb: 1.75,
+              }}
+            >
+              <Box
+                component="img"
+                src={APP_ICON}
+                alt="Gregg Dictionary"
+                sx={{
+                  width: 48,
+                  height: 48,
+
+                  objectFit: "contain",
+                }}
+              />
+
+              <Box>
+                <Typography
+                  sx={{
+                    fontWeight: 900,
+
+                    fontSize: 18,
+
+                    lineHeight: 1.1,
+                  }}
+                >
+                  Gregg Dictionary
+                </Typography>
+
+                <Typography
+                  sx={{
+                    color:
+                      "rgba(255,255,255,.45)",
+
+                    fontSize: 9,
+
+                    fontWeight: 800,
+
+                    letterSpacing: ".08em",
+
+                    mt: 0.3,
+                  }}
+                >
+                  GREGG SHORTHAND
+                </Typography>
+              </Box>
+            </Box>
+
+            <Typography
+              sx={{
+                maxWidth: 390,
+
+                color:
+                  "rgba(255,255,255,.56)",
+
+                fontSize: 13.5,
+
+                lineHeight: 1.75,
+              }}
+            >
+              A modern digital companion for
+              learning, exploring, and practicing
+              Gregg shorthand.
+            </Typography>
+          </Box>
+
+          {/* EXPLORE */}
+
+          <FooterColumn title="Explore">
+            <FooterLink
+              icon={<HomeRoundedIcon />}
+              label="Home"
+              onClick={() => scrollTo("home")}
+            />
+
+            <FooterLink
+              icon={<AutoStoriesRoundedIcon />}
+              label="Features"
+              onClick={() => scrollTo("features")}
+            />
+
+            <FooterLink
+              icon={<SchoolRoundedIcon />}
+              label="Learn Gregg"
+              onClick={() => scrollTo("learn")}
+            />
+
+            <FooterLink
+              icon={<HelpOutlineRoundedIcon />}
+              label="FAQ"
+              onClick={() => scrollTo("faq")}
+            />
+          </FooterColumn>
+
+          {/* APP */}
+
+          <FooterColumn title="Gregg Dictionary">
+            <FooterLink
+              icon={<SearchRoundedIcon />}
+              label="Search"
+              onClick={() => scrollTo("features")}
+            />
+
+            <FooterLink
+              icon={<LibraryBooksRoundedIcon />}
+              label="Browse"
+              onClick={() => scrollTo("features")}
+            />
+
+            <FooterLink
+              icon={<BookmarkRoundedIcon />}
+              label="Saved"
+              onClick={() => scrollTo("features")}
+            />
+
+            <FooterLink
+              icon={<SchoolRoundedIcon />}
+              label="Lessons"
+              onClick={() => scrollTo("learn")}
+            />
+          </FooterColumn>
+
+          {/* CONTACT */}
+
+          <FooterColumn title="Contact">
+            <Typography
+              sx={{
+                color:
+                  "rgba(255,255,255,.43)",
+
+                fontSize: 13,
+
+                lineHeight: 1.65,
+
+                maxWidth: 250,
+              }}
+            >
+              Have a question, suggestion, or feedback? We'd love to hear from you.
+            </Typography>
+
+            <ContactForm />
+          </FooterColumn>
+        </Box>
+
+        {/* FOOTER BOTTOM */}
+
+        <Box
+          sx={{
+            display: "flex",
+
+            alignItems: "center",
+
+            justifyContent: "space-between",
+
+            flexWrap: "wrap",
+
+            gap: 2,
+
+            pt: 3,
+          }}
+        >
+          <Typography
+            sx={{
+              color:
+                "rgba(255,255,255,.4)",
+
+              fontSize: 11.5,
+            }}
+          >
+            © 2026 Donme Studio. All rights reserved.
+          </Typography>
+
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.8,
+
+              color:
+                "rgba(255,255,255,.38)",
+            }}
+          >
+            <MenuBookRoundedIcon
+              sx={{ fontSize: 16 }}
+            />
+
+            <Typography
+              sx={{
+                fontSize: 11.5,
+              }}
+            >
+              Learn. Write. Remember.
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
+   FOOTER HELPERS
+   ========================================================= */
+
+function FooterColumn({ title, children }) {
+  return (
+    <Box>
+      <Typography
+        sx={{
+          fontWeight: 850,
+
+          fontSize: 13,
+
+          mb: 2,
+        }}
+      >
+        {title}
+      </Typography>
+
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          gap: 1.25,
+        }}
+      >
+        {children}
+      </Box>
+    </Box>
+  );
+}
+
+function FooterLink({
+  icon,
+  label,
+  onClick,
+  href,
+}) {
+  return (
+    <Button
+      component={href ? "a" : "button"}
+      href={href}
+      onClick={onClick}
+      startIcon={icon}
+      sx={{
+        justifyContent: "flex-start",
+
+        minWidth: 0,
+
+        p: 0,
+
+        color:
+          "rgba(255,255,255,.58)",
+
+        textTransform: "none",
+
+        fontWeight: 650,
+
+        fontSize: 12.5,
+
+        "& .MuiButton-startIcon": {
+          color: "#8FAEFF",
+
+          marginRight: 0.75,
+        },
+
+        "&:hover": {
+          bgcolor: "transparent",
+
+          color: "#fff",
+
+          "& .MuiButton-startIcon": {
+            color: "#fff",
+          },
+        },
+      }}
+    >
+      {label}
+    </Button>
+  );
+}
+
+/* =========================================================
+   CONTACT FORM (react-hook-form + Web3Forms)
+   ========================================================= */
+
+function ContactForm() {
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm();
+
+  const swalTheme = {
+    background: "#142653",
+    color: "#fff",
+    confirmButtonColor: BRAND,
+    buttonsStyling: true,
+    customClass: {
+      popup: "gregg-swal-popup",
+    },
+  };
+
+  const onSubmit = async (data) => {
+    try {
+      const response = await fetch(
+        "https://api.web3forms.com/submit",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            access_key: WEB3FORMS_ACCESS_KEY,
+            subject:
+              "New message from the Gregg Dictionary site",
+            ...data,
+          }),
+        }
+      );
+
+      const result = await response.json();
+
+      if (result.success) {
+        reset();
+
+        Swal.fire({
+          ...swalTheme,
+          icon: "success",
+          title: "Message sent!",
+          text: "Thanks for reaching out — we'll get back to you soon.",
+          confirmButtonText: "Great",
+        });
+      } else {
+        Swal.fire({
+          ...swalTheme,
+          icon: "error",
+          title: "Something went wrong",
+          text: "Your message couldn't be sent. Please try again.",
+          confirmButtonText: "Okay",
+        });
+      }
+    } catch (error) {
+      Swal.fire({
+        ...swalTheme,
+        icon: "error",
+        title: "Something went wrong",
+        text: "Your message couldn't be sent. Please try again.",
+        confirmButtonText: "Okay",
+      });
+    }
+  };
+
+  const fieldSx = {
+    width: "100%",
+
+    boxSizing: "border-box",
+
+    bgcolor: "rgba(255,255,255,.06)",
+
+    border: "1px solid rgba(255,255,255,.14)",
+
+    borderRadius: "10px",
+
+    color: "#fff",
+
+    fontSize: {
+      xs: 13.5,
+      sm: 12.5,
+    },
+
+    fontFamily: "inherit",
+
+    pr: {
+      xs: 1.25,
+      sm: 1.4,
+    },
+
+    pl: {
+      xs: 4.25,
+      sm: 4.5,
+    },
+
+    py: {
+      xs: 1.15,
+      sm: 1,
+    },
+
+    outline: "none",
+
+    "&::placeholder": {
+      color: "rgba(255,255,255,.4)",
+    },
+
+    "&:focus": {
+      borderColor: "rgba(255,255,255,.4)",
+    },
+  };
+
+  const fieldIconSx = {
+    position: "absolute",
+    left: {
+      xs: 10,
+      sm: 12,
+    },
+    fontSize: 18,
+    color: "rgba(255,255,255,.38)",
+    pointerEvents: "none",
+  };
+
+  return (
+    <Box
+      component="form"
+      noValidate
+      onSubmit={handleSubmit(onSubmit)}
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 1,
+
+        mt: 1.5,
+
+        width: "100%",
+
+        maxWidth: {
+          xs: "100%",
+          sm: 340,
+          md: 380,
+          lg: 400,
+        },
+      }}
+    >
+      <Box sx={{ position: "relative" }}>
+        <PersonRoundedIcon
+          sx={{
+            ...fieldIconSx,
+            top: "50%",
+            transform: "translateY(-50%)",
+          }}
+        />
+
+        <Box
+          component="input"
+          placeholder="Your name"
+          {...register("name", { required: true })}
+          sx={fieldSx}
+        />
+      </Box>
+
+      {errors.name && (
+        <Typography
+          sx={{ fontSize: 10.5, color: "#FF9C9C" }}
+        >
+          Name is required.
+        </Typography>
+      )}
+
+      <Box sx={{ position: "relative" }}>
+        <EmailRoundedIcon
+          sx={{
+            ...fieldIconSx,
+            top: "50%",
+            transform: "translateY(-50%)",
+          }}
+        />
+
+        <Box
+          component="input"
+          type="email"
+          placeholder="Your email"
+          {...register("email", {
+            required: true,
+            pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+          })}
+          sx={fieldSx}
+        />
+      </Box>
+
+      {errors.email && (
+        <Typography
+          sx={{ fontSize: 10.5, color: "#FF9C9C" }}
+        >
+          A valid email is required.
+        </Typography>
+      )}
+
+      <Box sx={{ position: "relative" }}>
+        <ChatBubbleOutlineRoundedIcon
+          sx={{
+            ...fieldIconSx,
+            top: 12,
+          }}
+        />
+
+        <Box
+          component="textarea"
+          rows={3}
+          placeholder="Your message"
+          {...register("message", { required: true })}
+          sx={{ ...fieldSx, resize: "none" }}
+        />
+      </Box>
+
+      {errors.message && (
+        <Typography
+          sx={{ fontSize: 10.5, color: "#FF9C9C" }}
+        >
+          A message is required.
+        </Typography>
+      )}
+
+      <Button
+        type="submit"
+        disabled={isSubmitting}
+        variant="contained"
+        disableElevation
+        fullWidth
+        sx={{
+          bgcolor: BRAND,
+
+          width: "100%",
+
+          textTransform: "none",
+
+          fontWeight: 750,
+
+          fontSize: {
+            xs: 13,
+            sm: 12.5,
+          },
+
+          borderRadius: "10px",
+
+          py: {
+            xs: 1.1,
+            sm: 0.9,
+          },
+
+          mt: 0.25,
+
+          "&:hover": {
+            bgcolor: BRAND_DARK,
+          },
+
+          "&.Mui-disabled": {
+            bgcolor: "rgba(56,105,232,.5)",
+            color: "rgba(255,255,255,.7)",
+          },
+        }}
+      >
+        {isSubmitting ? "Sending..." : "Send message"}
+      </Button>
+    </Box>
+  );
+}
