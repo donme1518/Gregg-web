@@ -2864,7 +2864,7 @@ function PrivacyPolicyPage() {
               mt: 2,
             }}
           >
-            Last updated: [Insert Date]
+            Last updated: September 17, 2026
           </Typography>
         </Box>
 
@@ -2969,40 +2969,6 @@ function PrivacyPolicyPage() {
               )}
             </Box>
           ))}
-
-          {/* CONTACT */}
-
-          <Box
-            sx={{
-              bgcolor: BRAND,
-              color: "#fff",
-              borderRadius: { xs: "20px", md: "24px" },
-              boxShadow: "0 20px 45px rgba(56,105,232,.2)",
-              p: { xs: 2.5, sm: 3, md: 3.5 },
-            }}
-          >
-            <Typography
-              component="h2"
-              sx={{
-                fontWeight: 850,
-                fontSize: { xs: 16.5, md: 18 },
-                mb: 1.25,
-              }}
-            >
-              8. Contact Us
-            </Typography>
-
-            <Typography
-              sx={{
-                color: "rgba(255,255,255,.85)",
-                fontSize: 14,
-                lineHeight: 1.75,
-              }}
-            >
-              If you have questions about this Privacy Policy, please
-              contact us at [Insert Contact Email].
-            </Typography>
-          </Box>
         </Box>
       </Box>
     </Box>
