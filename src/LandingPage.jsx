@@ -38,6 +38,7 @@ import TouchAppRoundedIcon from "@mui/icons-material/TouchAppRounded";
 import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
 import EmailRoundedIcon from "@mui/icons-material/EmailRounded";
 import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
+import PrivacyTipRoundedIcon from "@mui/icons-material/PrivacyTipRounded";
 
 /*
  * Gregg Dictionary Landing Page
@@ -474,6 +475,11 @@ function DownloadCounter() {
 }
 
 export default function LandingPage() {
+  // "home" shows the marketing sections; "privacy" swaps in the
+  // Privacy Policy page. Nav and Footer stay mounted either way so
+  // the chrome never disappears.
+  const [page, setPage] = useState("home");
+
   return (
     <DownloadProvider>
       <DownloadProgressBar />
@@ -486,18 +492,22 @@ export default function LandingPage() {
           overflowX: "hidden",
         }}
       >
-        <Nav />
+        <Nav page={page} onNavigate={setPage} />
 
-        <main>
-          <Hero />
-          <Mission />
-          <Features />
-          <LearnSection />
-          <Faq />
-          <DownloadSection />
-        </main>
+        {page === "privacy" ? (
+          <PrivacyPolicyPage />
+        ) : (
+          <main>
+            <Hero />
+            <Mission />
+            <Features />
+            <LearnSection />
+            <Faq />
+            <DownloadSection />
+          </main>
+        )}
 
-        <Footer />
+        <Footer onNavigate={setPage} />
       </Box>
     </DownloadProvider>
   );
@@ -507,7 +517,7 @@ export default function LandingPage() {
    NAVIGATION
    ========================================================= */
 
-function Nav() {
+function Nav({ page, onNavigate }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const { triggerDownload, isDownloading } = useDownload();
 
@@ -532,18 +542,40 @@ function Nav() {
       id: "faq",
       icon: <HelpOutlineRoundedIcon sx={{ fontSize: 19 }} />,
     },
+    {
+      label: "Privacy Policy",
+      view: "privacy",
+      icon: <PrivacyTipRoundedIcon sx={{ fontSize: 19 }} />,
+    },
   ];
 
+  // Section items (id) scroll within the home page — if we're on the
+  // Privacy Policy page, switch back to home first, then scroll once
+  // that content has mounted. The Privacy Policy item (view) just
+  // swaps the page, no scrolling involved.
   const scrollTo = (id) => {
-    const target = document.getElementById(id);
+    if (page !== "home") {
+      onNavigate("home");
 
-    if (target) {
-      target.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          document
+            .getElementById(id)
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
       });
+    } else {
+      document
+        .getElementById(id)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
+    setMobileOpen(false);
+  };
+
+  const goToView = (view) => {
+    onNavigate(view);
+    window.scrollTo({ top: 0, behavior: "smooth" });
     setMobileOpen(false);
   };
 
@@ -712,8 +744,12 @@ function Nav() {
         >
           {navItems.map((item) => (
             <Button
-              key={item.id}
-              onClick={() => scrollTo(item.id)}
+              key={item.id ?? item.view}
+              onClick={
+                item.view
+                  ? () => goToView(item.view)
+                  : () => scrollTo(item.id)
+              }
               startIcon={item.icon}
               sx={{
                 color: MUTED,
@@ -866,10 +902,14 @@ function Nav() {
         >
           {navItems.map((item) => (
             <Button
-              key={item.id}
+              key={item.id ?? item.view}
               fullWidth
               startIcon={item.icon}
-              onClick={() => scrollTo(item.id)}
+              onClick={
+                item.view
+                  ? () => goToView(item.view)
+                  : () => scrollTo(item.id)
+              }
               sx={{
                 justifyContent: "flex-start",
 
@@ -2685,10 +2725,295 @@ function DownloadSection() {
 }
 
 /* =========================================================
+   PRIVACY POLICY
+   ========================================================= */
+
+const PRIVACY_SECTIONS = [
+  {
+    title: "1. Information We Store on Your Device",
+    body:
+      "When you sign in, the App stores the following information locally on your device:",
+    bullets: [
+      "Name — your display name as provided by your account or sign-in method.",
+      "Email address — used to identify your account and, where applicable, for account recovery.",
+      "Profile photo — your account's profile picture, used to personalize your experience within the App.",
+    ],
+    footnote:
+      "This information is stored on your device to keep you signed in and to personalize the App between sessions. It is not sold to third parties.",
+  },
+  {
+    title: "2. How This Information Is Used",
+    bullets: [
+      "To identify you within the App and maintain your signed-in session.",
+      "To display your name and profile photo within the App's interface (e.g. account settings).",
+      "To associate your saved words, search history, and other in-app activity with your account.",
+    ],
+  },
+  {
+    title: "3. Third-Party Services",
+    body:
+      "The App uses the following third-party services, which may independently collect certain data as part of their own operation:",
+    bullets: [
+      "Google AdMob — used to display advertisements within the App. AdMob may collect device identifiers and usage data to serve and measure ads.",
+      "Amazon Appstore SDK — used solely for license verification (DRM) to confirm the App was obtained through a legitimate source. This SDK does not process in-app purchases and does not access your name, email, or profile photo.",
+    ],
+  },
+  {
+    title: "4. Data Storage and Security",
+    body:
+      "Your name, email, and profile photo are stored locally on your device. We take reasonable measures to protect this information, but no method of electronic storage is 100% secure.",
+  },
+  {
+    title: "5. Your Choices",
+    bullets: [
+      "You may sign out of the App at any time, which removes your locally stored account information from the device.",
+      "You may uninstall the App to remove all locally stored data associated with it.",
+    ],
+  },
+  {
+    title: "6. Children's Privacy",
+    body:
+      "The App is not directed at children under 13, and we do not knowingly collect personal information from children under 13.",
+  },
+  {
+    title: "7. Changes to This Policy",
+    body:
+      "We may update this Privacy Policy from time to time. Continued use of the App after changes are posted constitutes acceptance of the revised policy.",
+  },
+];
+
+function PrivacyPolicyPage() {
+  return (
+    <Box
+      sx={{
+        pt: {
+          xs: 13,
+          sm: 14,
+          md: 15,
+        },
+
+        pb: {
+          xs: 8,
+          md: 11,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 800,
+          mx: "auto",
+
+          px: {
+            xs: 2,
+            sm: 3,
+            md: 4,
+          },
+        }}
+      >
+        {/* HEADER */}
+
+        <Box sx={{ textAlign: "center", mb: 5 }}>
+          <Chip
+            icon={<PrivacyTipRoundedIcon sx={{ fontSize: 17 }} />}
+            label="Your privacy"
+            sx={{
+              bgcolor: BRAND_LIGHT,
+              color: BRAND_DARK,
+              fontWeight: 800,
+              borderRadius: "10px",
+              mb: 2.25,
+              "& .MuiChip-icon": { color: BRAND },
+            }}
+          />
+
+          <Typography
+            component="h1"
+            sx={{
+              fontWeight: 900,
+              letterSpacing: "-0.035em",
+              fontSize: { xs: 30, sm: 36, md: 44 },
+              lineHeight: 1.15,
+              color: TEXT,
+              mb: 1.5,
+            }}
+          >
+            Privacy Policy
+          </Typography>
+
+          <Typography
+            sx={{
+              color: MUTED,
+              fontSize: { xs: 15, md: 16 },
+              lineHeight: 1.75,
+              maxWidth: 560,
+              mx: "auto",
+            }}
+          >
+            This Privacy Policy explains what information the Gregg
+            Dictionary app ("the App") collects, why, and how it is
+            stored when you use the App. By continuing to use the
+            App, you agree to the practices described below.
+          </Typography>
+
+          <Typography
+            sx={{
+              color: MUTED,
+              fontSize: 12.5,
+              fontWeight: 700,
+              mt: 2,
+            }}
+          >
+            Last updated: [Insert Date]
+          </Typography>
+        </Box>
+
+        {/* SECTIONS */}
+
+        <Box
+          sx={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 2.5,
+          }}
+        >
+          {PRIVACY_SECTIONS.map((section) => (
+            <Box
+              key={section.title}
+              sx={{
+                bgcolor: "#fff",
+                border: `1px solid ${BORDER}`,
+                borderRadius: { xs: "20px", md: "24px" },
+                boxShadow: "0 14px 35px rgba(42,71,130,.07)",
+                p: { xs: 2.5, sm: 3, md: 3.5 },
+              }}
+            >
+              <Typography
+                component="h2"
+                sx={{
+                  fontWeight: 850,
+                  fontSize: { xs: 16.5, md: 18 },
+                  color: TEXT,
+                  mb: 1.25,
+                }}
+              >
+                {section.title}
+              </Typography>
+
+              {section.body && (
+                <Typography
+                  sx={{
+                    color: MUTED,
+                    fontSize: 14,
+                    lineHeight: 1.75,
+                    mb: section.bullets ? 1.5 : 0,
+                  }}
+                >
+                  {section.body}
+                </Typography>
+              )}
+
+              {section.bullets && (
+                <Box
+                  sx={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 1,
+                  }}
+                >
+                  {section.bullets.map((bullet) => (
+                    <Box
+                      key={bullet}
+                      sx={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 1,
+                      }}
+                    >
+                      <CheckCircleRoundedIcon
+                        sx={{
+                          color: BRAND,
+                          fontSize: 18,
+                          mt: 0.2,
+                          flexShrink: 0,
+                        }}
+                      />
+
+                      <Typography
+                        sx={{
+                          color: MUTED,
+                          fontSize: 14,
+                          lineHeight: 1.7,
+                        }}
+                      >
+                        {bullet}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+
+              {section.footnote && (
+                <Typography
+                  sx={{
+                    color: MUTED,
+                    fontSize: 13,
+                    lineHeight: 1.7,
+                    mt: 1.75,
+                    pt: 1.5,
+                    borderTop: `1px solid ${BORDER}`,
+                  }}
+                >
+                  {section.footnote}
+                </Typography>
+              )}
+            </Box>
+          ))}
+
+          {/* CONTACT */}
+
+          <Box
+            sx={{
+              bgcolor: BRAND,
+              color: "#fff",
+              borderRadius: { xs: "20px", md: "24px" },
+              boxShadow: "0 20px 45px rgba(56,105,232,.2)",
+              p: { xs: 2.5, sm: 3, md: 3.5 },
+            }}
+          >
+            <Typography
+              component="h2"
+              sx={{
+                fontWeight: 850,
+                fontSize: { xs: 16.5, md: 18 },
+                mb: 1.25,
+              }}
+            >
+              8. Contact Us
+            </Typography>
+
+            <Typography
+              sx={{
+                color: "rgba(255,255,255,.85)",
+                fontSize: 14,
+                lineHeight: 1.75,
+              }}
+            >
+              If you have questions about this Privacy Policy, please
+              contact us at [Insert Contact Email].
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
    FOOTER
    ========================================================= */
 
-function Footer() {
+function Footer({ onNavigate }) {
   const scrollTo = (id) => {
     document
       .getElementById(id)
@@ -2931,23 +3256,59 @@ function Footer() {
             sx={{
               display: "flex",
               alignItems: "center",
-              gap: 0.8,
+              gap: 2.5,
 
-              color:
-                "rgba(255,255,255,.38)",
+              flexWrap: "wrap",
             }}
           >
-            <MenuBookRoundedIcon
-              sx={{ fontSize: 16 }}
-            />
-
-            <Typography
+            <Button
+              onClick={() => {
+                onNavigate?.("privacy");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
               sx={{
+                minWidth: 0,
+                p: 0,
+
+                color: "rgba(255,255,255,.4)",
+
+                textTransform: "none",
+
+                fontWeight: 650,
+
                 fontSize: 11.5,
+
+                "&:hover": {
+                  bgcolor: "transparent",
+                  color: "#fff",
+                },
               }}
             >
-              Learn. Write. Remember.
-            </Typography>
+              Privacy Policy
+            </Button>
+
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.8,
+
+                color:
+                  "rgba(255,255,255,.38)",
+              }}
+            >
+              <MenuBookRoundedIcon
+                sx={{ fontSize: 16 }}
+              />
+
+              <Typography
+                sx={{
+                  fontSize: 11.5,
+                }}
+              >
+                Learn. Write. Remember.
+              </Typography>
+            </Box>
           </Box>
         </Box>
       </Box>
