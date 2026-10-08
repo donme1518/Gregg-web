@@ -16,6 +16,12 @@ import Accordion from "@mui/material/Accordion";
 import AccordionSummary from "@mui/material/AccordionSummary";
 import AccordionDetails from "@mui/material/AccordionDetails";
 import IconButton from "@mui/material/IconButton";
+import Dialog from "@mui/material/Dialog";
+import DialogContent from "@mui/material/DialogContent";
+import DialogActions from "@mui/material/DialogActions";
+import Autocomplete from "@mui/material/Autocomplete";
+import TextField from "@mui/material/TextField";
+import CircularProgress from "@mui/material/CircularProgress";
 
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
@@ -38,6 +44,7 @@ import TouchAppRoundedIcon from "@mui/icons-material/TouchAppRounded";
 import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
 import EmailRoundedIcon from "@mui/icons-material/EmailRounded";
 import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
+import PlaceRoundedIcon from "@mui/icons-material/PlaceRounded";
 
 /*
  * Gregg Dictionary Landing Page
@@ -60,39 +67,16 @@ import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineR
  * ├── onboarding-browse.png
  * ├── onboarding-saved.png
  * └── app-preview.mp4
- *
- * The .apk itself is NOT required in /public. APP_DOWNLOAD_URL below
- * can point either at a same-origin file in /public (e.g.
- * "/Gregg%20Dictionary.apk") or at an external host such as a GitHub
- * Releases asset — triggerDownload() (below) detects which one it is
- * and downloads it the right way automatically.
  */
 
 const APP_ICON = "/icon.png";
 const APP_VIDEO = "/app-preview.mp4";
 
-// Where the .apk is actually hosted. This can be either:
-//   - a same-origin path into /public, e.g. "/Gregg%20Dictionary.apk"
-//   - a full cross-origin URL, e.g. a GitHub Releases asset link
-// triggerDownload() below picks the right download strategy for
-// whichever one this is set to, so no other code needs to change if
-// you move the file later.
-const APP_DOWNLOAD_URL =
-  "https://github.com/donme1518/Gregg-web/releases/download/v1.0.0/Gregg.Dictionary.apk";
+// The .apk lives in /public as "Gregg Dictionary.apk" — spaces are
+// URL-encoded in the href, but the visitor's downloaded file keeps
+// the readable name via the `download` attribute.
+const APP_DOWNLOAD_URL = "/Gregg%20Dictionary.apk";
 const APP_DOWNLOAD_FILENAME = "Gregg Dictionary.apk";
-
-// Same-origin URLs (local /public files) can be fetched and streamed
-// with real byte progress + a custom filename. Cross-origin URLs
-// (like GitHub Releases) can't — fetch() is blocked by CORS before
-// it can read any bytes — so those fall back to a plain navigation
-// download instead, which browsers allow regardless of CORS.
-function isSameOriginDownloadUrl(url) {
-  try {
-    return new URL(url, window.location.origin).origin === window.location.origin;
-  } catch (error) {
-    return false;
-  }
-}
 
 // Free, no-signup hit counter (https://countapi.mileshilliard.com) used
 // to track and display real download counts across all visitors without
@@ -100,7 +84,33 @@ function isSameOriginDownloadUrl(url) {
 // app — swap this whole block out if you already have your own backend
 // and would rather record downloads there instead.
 const DOWNLOAD_COUNTER_API = "https://countapi.mileshilliard.com/api/v1";
-const DOWNLOAD_COUNTER_KEY = "gregg-shorthand-dictionary-apk-downloads-v1";
+// Bumping the key (v1 -> v2) starts the public counter again from zero.
+const DOWNLOAD_COUNTER_KEY = "gregg-shorthand-dictionary-apk-downloads-v2";
+
+/* ---- Where do learners come from? (OpenStreetMap + Supabase) ----
+ * 100% free, no credit card needed:
+ *   - school search:  Photon geocoder (photon.komoot.io, OpenStreetMap data)
+ *   - map:            Leaflet + OpenStreetMap tiles
+ *   - storage:        Supabase free plan
+ *
+ * Add these two to Vercel (Project -> Settings -> Environment Variables)
+ * and to a local .env file, then redeploy:
+ *
+ *   VITE_SUPABASE_URL          https://xxxx.supabase.co
+ *   VITE_SUPABASE_ANON_KEY     the project's public "anon" key
+ */
+const ENV = import.meta.env ?? {};
+const SUPABASE_URL = (ENV.VITE_SUPABASE_URL ?? "").replace(/\/$/, "");
+const SUPABASE_ANON_KEY = ENV.VITE_SUPABASE_ANON_KEY ?? "";
+
+const PHOTON_API = "https://photon.komoot.io/api/";
+const LEAFLET_CDN = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4";
+
+const LOCATIONS_TABLE = "download_locations";
+const LOCATIONS_SUMMARY_VIEW = "school_download_summary";
+
+// Rough bounding box of the Philippines.
+const PH_BOUNDS = { north: 21.5, south: 4.4, west: 116.0, east: 127.0 };
 
 // Get a free access key at https://web3forms.com and paste it here.
 const WEB3FORMS_ACCESS_KEY = "1f7b9bb3-d70d-49ed-908a-b1326d344706";
@@ -181,6 +191,851 @@ const FAQS = [
    progress bar, and one shared, realtime-ish download count.
    ========================================================= */
 
+/* =========================================================
+   MAP + SUPABASE HELPERS
+   ========================================================= */
+
+const isInPhilippines = (lat, lng) =>
+  lat >= PH_BOUNDS.south &&
+  lat <= PH_BOUNDS.north &&
+  lng >= PH_BOUNDS.west &&
+  lng <= PH_BOUNDS.east;
+
+// Loads Leaflet (free, open-source maps) from a CDN once.
+let leafletPromise = null;
+
+function loadLeaflet() {
+  if (window.L?.map) return Promise.resolve(window.L);
+  if (leafletPromise) return leafletPromise;
+
+  const stylesheet = new Promise((resolve, reject) => {
+    if (document.getElementById("leaflet-css")) {
+      resolve();
+      return;
+    }
+
+    const link = document.createElement("link");
+    link.id = "leaflet-css";
+    link.rel = "stylesheet";
+    link.href = `${LEAFLET_CDN}/leaflet.min.css`;
+    link.onload = () => resolve();
+    link.onerror = () => reject(new Error("leaflet-css-failed"));
+    document.head.appendChild(link);
+  });
+
+  const script = new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = `${LEAFLET_CDN}/leaflet.min.js`;
+    el.async = true;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error("leaflet-js-failed"));
+    document.head.appendChild(el);
+  });
+
+  leafletPromise = Promise.all([stylesheet, script])
+    .then(() => window.L)
+    .catch((error) => {
+      leafletPromise = null;
+      throw error;
+    });
+
+  return leafletPromise;
+}
+
+// Only places OpenStreetMap tags as a school, college or university.
+const SCHOOL_OSM_TAGS = [
+  "amenity:university",
+  "amenity:college",
+  "amenity:school",
+];
+const SCHOOL_OSM_VALUES = ["university", "college", "school"];
+
+// Photon (free, OpenStreetMap-based, built for search-as-you-type).
+async function searchSchools(query, signal) {
+  const params = new URLSearchParams({
+    q: query,
+    limit: "10",
+    lang: "en",
+    bbox: [
+      PH_BOUNDS.west,
+      PH_BOUNDS.south,
+      PH_BOUNDS.east,
+      PH_BOUNDS.north,
+    ].join(","),
+  });
+
+  SCHOOL_OSM_TAGS.forEach((tag) => params.append("osm_tag", tag));
+
+  const response = await fetch(`${PHOTON_API}?${params}`, { signal });
+
+  if (!response.ok) throw new Error("search-failed");
+
+  const data = await response.json();
+  const seen = new Set();
+  const results = [];
+
+  (data.features ?? []).forEach((feature) => {
+    const props = feature.properties ?? {};
+    const [lng, lat] = feature.geometry?.coordinates ?? [];
+
+    if (
+      !props.name ||
+      !props.osm_id ||
+      typeof lat !== "number" ||
+      typeof lng !== "number" ||
+      !isInPhilippines(lat, lng) ||
+      !SCHOOL_OSM_VALUES.includes(props.osm_value)
+    ) {
+      return;
+    }
+
+    const placeId = `${props.osm_type}${props.osm_id}`;
+
+    if (seen.has(placeId)) return;
+    seen.add(placeId);
+
+    const address = [
+      ...new Set(
+        [props.street, props.district, props.city || props.county, props.state]
+          .filter(Boolean)
+      ),
+    ].join(", ");
+
+    // Same name and same address twice = the same school listed twice.
+    const lookAlikeKey = `${props.name}|${address}`.toLowerCase();
+
+    if (seen.has(lookAlikeKey)) return;
+    seen.add(lookAlikeKey);
+
+    results.push({
+      placeId,
+      label: props.name,
+      secondary: address || "Philippines",
+      lat,
+      lng,
+    });
+  });
+
+  return results;
+}
+
+let warnedMissingSupabase = false;
+
+const supabaseConfigured = () => {
+  const ok = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+  if (!ok && !warnedMissingSupabase) {
+    warnedMissingSupabase = true;
+    console.warn(
+      "[Gregg] VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are missing, so " +
+        "download locations are NOT being saved or shown on the map. " +
+        "Add them to .env (restart `npm run dev`) and to Vercel, then redeploy."
+    );
+  }
+
+  return ok;
+};
+
+const supabaseHeaders = () => ({
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  "Content-Type": "application/json",
+});
+
+// One row per school: { place_id, school_name, address, lat, lng, downloads }
+async function fetchSchoolSummary() {
+  if (!supabaseConfigured()) return [];
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/${LOCATIONS_SUMMARY_VIEW}` +
+      "?select=place_id,school_name,address,lat,lng,downloads" +
+      "&order=downloads.desc&limit=1000",
+    { headers: supabaseHeaders() }
+  );
+
+  if (!response.ok) {
+    console.warn(
+      "[Gregg] Couldn't load school_download_summary:",
+      response.status,
+      await response.text().catch(() => "")
+    );
+    throw new Error("summary-fetch-failed");
+  }
+
+  const rows = await response.json();
+
+  return rows.filter(
+    (row) =>
+      row &&
+      typeof row.lat === "number" &&
+      typeof row.lng === "number" &&
+      isInPhilippines(row.lat, row.lng)
+  );
+}
+
+async function saveDownloadLocation(place) {
+  if (!supabaseConfigured()) return false;
+
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/${LOCATIONS_TABLE}`,
+    {
+      method: "POST",
+      headers: { ...supabaseHeaders(), Prefer: "return=minimal" },
+      body: JSON.stringify({
+        place_id: place.placeId,
+        school_name: place.name,
+        address: place.address,
+        lat: place.lat,
+        lng: place.lng,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    console.warn(
+      "[Gregg] Couldn't save the download location:",
+      response.status,
+      await response.text().catch(() => "")
+    );
+  }
+
+  return response.ok;
+}
+
+/* =========================================================
+   SCHOOL PICKER DIALOG
+   Required before every download. The visitor must pick a
+   real school from the suggestions (OpenStreetMap data) —
+   free text alone is never accepted — and it must be located
+   in the Philippines.
+   ========================================================= */
+
+/* =========================================================
+   MANUAL PIN MAP (fallback when a school isn't in the search)
+   Tap/click the map to drop a pin on the school; drag to adjust.
+   ========================================================= */
+
+const PH_VIEW = [
+  [PH_BOUNDS.south + 0.2, PH_BOUNDS.west + 0.5],
+  [PH_BOUNDS.north - 0.3, PH_BOUNDS.east - 0.2],
+];
+
+function ManualPinMap({ pin, onPin, onError }) {
+  const elRef = useRef(null);
+  const mapRef = useRef(null);
+  const markerRef = useRef(null);
+  const leafletRef = useRef(null);
+  const lastGoodRef = useRef(null);
+  const onPinRef = useRef(onPin);
+  const onErrorRef = useRef(onError);
+
+  const [state, setState] = useState("loading"); // loading | ready | error
+
+  onPinRef.current = onPin;
+  onErrorRef.current = onError;
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer;
+
+    loadLeaflet()
+      .then((L) => {
+        if (cancelled || !elRef.current) return;
+
+        const map = L.map(elRef.current, {
+          minZoom: 5,
+          maxZoom: 18,
+          maxBounds: [
+            [0, 108],
+            [27, 134],
+          ],
+          maxBoundsViscosity: 0.8,
+        });
+
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>',
+        }).addTo(map);
+
+        map.fitBounds(PH_VIEW);
+
+        map.on("click", (event) => {
+          const { lat, lng } = event.latlng;
+
+          if (!isInPhilippines(lat, lng)) {
+            onErrorRef.current("Please place the pin inside the Philippines.");
+            return;
+          }
+
+          onErrorRef.current("");
+          onPinRef.current({ lat, lng });
+        });
+
+        leafletRef.current = L;
+        mapRef.current = map;
+        setState("ready");
+
+        // The dialog is still animating open — re-measure once it settles.
+        timer = setTimeout(() => {
+          map.invalidateSize();
+          map.fitBounds(PH_VIEW);
+        }, 350);
+      })
+      .catch(() => {
+        if (!cancelled) setState("error");
+      });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+
+      markerRef.current = null;
+    };
+  }, []);
+
+  // Keep the draggable pin in sync with the chosen spot.
+  useEffect(() => {
+    if (state !== "ready") return;
+
+    const L = leafletRef.current;
+    const map = mapRef.current;
+
+    if (!pin) {
+      markerRef.current?.remove();
+      markerRef.current = null;
+      lastGoodRef.current = null;
+      return;
+    }
+
+    lastGoodRef.current = pin;
+
+    if (markerRef.current) {
+      markerRef.current.setLatLng([pin.lat, pin.lng]);
+      return;
+    }
+
+    const marker = L.marker([pin.lat, pin.lng], {
+      draggable: true,
+      icon: buildMarkerIcon(L, 1).icon,
+    }).addTo(map);
+
+    marker.on("dragend", () => {
+      const { lat, lng } = marker.getLatLng();
+
+      if (!isInPhilippines(lat, lng)) {
+        onErrorRef.current("Please place the pin inside the Philippines.");
+
+        const back = lastGoodRef.current;
+        if (back) marker.setLatLng([back.lat, back.lng]);
+        return;
+      }
+
+      onErrorRef.current("");
+      onPinRef.current({ lat, lng });
+    });
+
+    markerRef.current = marker;
+  }, [pin, state]);
+
+  return (
+    <Box
+      sx={{
+        position: "relative",
+        height: 250,
+        borderRadius: "16px",
+        overflow: "hidden",
+        border: `1px solid ${BORDER}`,
+        bgcolor: BRAND_LIGHT,
+        isolation: "isolate",
+      }}
+    >
+      <Box ref={elRef} sx={{ position: "absolute", inset: 0 }} />
+
+      {state === "loading" && (
+        <Box
+          sx={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 1000,
+            display: "grid",
+            placeItems: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <CircularProgress size={26} sx={{ color: BRAND }} />
+        </Box>
+      )}
+
+      {state === "error" && (
+        <Box
+          sx={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 1000,
+            display: "grid",
+            placeItems: "center",
+            p: 2,
+            textAlign: "center",
+          }}
+        >
+          <Typography sx={{ color: MUTED, fontSize: 13.5 }}>
+            The map couldn&apos;t be loaded. Please try again later.
+          </Typography>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function SchoolPickerDialog({ open, onClose, onConfirm }) {
+  const [inputValue, setInputValue] = useState("");
+  const [options, setOptions] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [noResults, setNoResults] = useState(false);
+  const [error, setError] = useState("");
+
+  // Fallback when the school isn't in the search results.
+  const [manualMode, setManualMode] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [pin, setPin] = useState(null);
+
+  const requestIdRef = useRef(0);
+
+  // Fresh form every time the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+
+    setInputValue("");
+    setOptions([]);
+    setSelected(null);
+    setNoResults(false);
+    setError("");
+    setManualMode(false);
+    setManualName("");
+    setPin(null);
+  }, [open]);
+
+  // Debounced suggestions. The delay keeps us well inside Photon's
+  // fair-use limit (about one request per second).
+  useEffect(() => {
+    if (!open || selected) return undefined;
+
+    const query = inputValue.trim();
+
+    if (query.length < 3) {
+      requestIdRef.current += 1;
+      setOptions([]);
+      setNoResults(false);
+      setSearching(false);
+      return undefined;
+    }
+
+    const requestId = ++requestIdRef.current;
+    const controller = new AbortController();
+    setSearching(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const list = await searchSchools(query, controller.signal);
+
+        if (requestId !== requestIdRef.current) return;
+
+        setOptions(list);
+        setNoResults(list.length === 0);
+        setError("");
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+        if (requestId !== requestIdRef.current) return;
+
+        setOptions([]);
+        setError(
+          "Couldn't search for schools right now. Check your connection and try again."
+        );
+      } finally {
+        if (requestId === requestIdRef.current) setSearching(false);
+      }
+    }, 450);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [inputValue, open, selected]);
+
+  const handleSelect = (option) => {
+    if (!option) {
+      setSelected(null);
+      return;
+    }
+
+    setSelected({
+      placeId: option.placeId,
+      name: option.label,
+      address: option.secondary,
+      lat: option.lat,
+      lng: option.lng,
+    });
+    setInputValue(option.label);
+    setOptions([]);
+    setError("");
+  };
+
+  const handleInputChange = (_event, value, reason) => {
+    // MUI echoes our own value changes back as "reset" — ignore them.
+    if (reason === "reset") return;
+
+    setInputValue(value);
+    setError("");
+
+    if (selected && value !== selected.name) setSelected(null);
+  };
+
+  const noOptionsText =
+    inputValue.trim().length < 3
+      ? "Type at least 3 letters of your school's name"
+      : searching
+        ? "Searching…"
+        : noResults
+          ? "No matching school found in the Philippines"
+          : "Type your school's name";
+
+  const trimmedManualName = manualName.trim();
+
+  // A manually pinned school is grouped by its (normalised) name, so
+  // several students pinning the same school land on one map marker.
+  const manualPlace =
+    manualMode && trimmedManualName.length >= 3 && pin
+      ? {
+          placeId: `manual:${trimmedManualName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 80)}`,
+          name: trimmedManualName,
+          address: "Pinned manually on the map",
+          lat: pin.lat,
+          lng: pin.lng,
+        }
+      : null;
+
+  const canContinue = manualMode ? Boolean(manualPlace) : Boolean(selected);
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="xs"
+      slotProps={{
+        paper: {
+          sx: {
+            borderRadius: "24px",
+            p: { xs: 0.5, sm: 1 },
+          },
+        },
+      }}
+    >
+      <DialogContent sx={{ pb: 1 }}>
+        <Box
+          sx={{
+            width: 48,
+            height: 48,
+            borderRadius: "16px",
+            bgcolor: BRAND_LIGHT,
+            color: BRAND,
+            display: "grid",
+            placeItems: "center",
+            mb: 1.75,
+          }}
+        >
+          <SchoolRoundedIcon />
+        </Box>
+
+        <Typography
+          component="h2"
+          sx={{
+            fontWeight: 900,
+            fontSize: 22,
+            letterSpacing: "-0.02em",
+            color: TEXT,
+            mb: 0.75,
+          }}
+        >
+          Where do you study?
+        </Typography>
+
+        <Typography
+          sx={{
+            color: MUTED,
+            fontSize: 14,
+            lineHeight: 1.65,
+            mb: 2.25,
+          }}
+        >
+          Tell us your school or university before you download. We only
+          save the school&apos;s name and location to see where learners
+          come from — never your name or any personal details.
+        </Typography>
+
+        {!manualMode && (
+          <>
+        <Autocomplete
+          options={options}
+          value={
+            selected
+              ? {
+                  placeId: selected.placeId,
+                  label: selected.name,
+                  secondary: selected.address,
+                }
+              : null
+          }
+          inputValue={inputValue}
+          onInputChange={handleInputChange}
+          onChange={(_event, option) => handleSelect(option)}
+          filterOptions={(items) => items}
+          getOptionLabel={(option) => option.label ?? ""}
+          getOptionKey={(option) => option.placeId}
+          isOptionEqualToValue={(option, value) =>
+            option.placeId === value.placeId
+          }
+          loading={searching}
+          noOptionsText={noOptionsText}
+          loadingText="Searching…"
+          renderOption={(props, option) => {
+            // MUI's own key is the school name, and two OpenStreetMap
+            // places can share a name — key on the unique place id instead.
+            const { key: _unusedKey, ...rest } = props;
+
+            return (
+              <Box component="li" key={option.placeId} {...rest}>
+                <PlaceRoundedIcon
+                  sx={{ color: BRAND, mr: 1.25, fontSize: 20 }}
+                />
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    sx={{ fontWeight: 700, fontSize: 14, color: TEXT }}
+                  >
+                    {option.label}
+                  </Typography>
+                  {option.secondary && (
+                    <Typography sx={{ fontSize: 12.5, color: MUTED }}>
+                      {option.secondary}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            );
+          }}
+          renderInput={(params) => {
+            // Newer MUI versions pass the input props under slotProps.input,
+            // older ones under InputProps — support both.
+            const usesSlots = Boolean(params.slotProps?.input);
+            const inputProps = usesSlots
+              ? params.slotProps.input
+              : params.InputProps ?? {};
+
+            const endAdornment = (
+              <>
+                {searching && <CircularProgress color="inherit" size={18} />}
+                {inputProps.endAdornment}
+              </>
+            );
+
+            const adornmentProps = usesSlots
+              ? {
+                  slotProps: {
+                    ...params.slotProps,
+                    input: { ...params.slotProps.input, endAdornment },
+                  },
+                }
+              : { InputProps: { ...params.InputProps, endAdornment } };
+
+            return (
+              <TextField
+                {...params}
+                autoFocus
+                label="School or university"
+                placeholder="e.g. University of the Philippines Diliman"
+                error={Boolean(error)}
+                helperText={
+                  error ||
+                  "Pick your school from the suggestions to continue."
+                }
+                {...adornmentProps}
+              />
+            );
+          }}
+        />
+
+        {selected && (
+          <Box
+            sx={{
+              mt: 1.75,
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 1,
+              p: 1.4,
+              borderRadius: "14px",
+              bgcolor: "#ECFDF3",
+              border: "1px solid #BBF7D0",
+            }}
+          >
+            <CheckCircleRoundedIcon
+              sx={{ color: "#16A34A", fontSize: 20, mt: "1px" }}
+            />
+            <Box sx={{ minWidth: 0 }}>
+              <Typography
+                sx={{ fontWeight: 800, fontSize: 13.5, color: "#166534" }}
+              >
+                Verified location
+              </Typography>
+              <Typography sx={{ fontSize: 12.5, color: "#166534" }}>
+                {selected.address}
+              </Typography>
+            </Box>
+          </Box>
+        )}
+          </>
+        )}
+
+        {manualMode ? (
+          <Box>
+            <TextField
+              fullWidth
+              autoFocus
+              label="School or university name"
+              placeholder="e.g. Sampaguita Community College"
+              value={manualName}
+              onChange={(event) => setManualName(event.target.value)}
+              slotProps={{ htmlInput: { maxLength: 150 } }}
+              helperText="Type the full name of your school."
+            />
+
+            <Typography
+              sx={{
+                mt: 2,
+                mb: 1,
+                fontSize: 13.5,
+                fontWeight: 700,
+                color: TEXT,
+              }}
+            >
+              Tap the map where your school is
+            </Typography>
+
+            <ManualPinMap pin={pin} onPin={setPin} onError={setError} />
+
+            {error && (
+              <Typography sx={{ mt: 1, fontSize: 12.5, color: "#D32F2F" }}>
+                {error}
+              </Typography>
+            )}
+
+            {pin && (
+              <Box
+                sx={{
+                  mt: 1.5,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 1,
+                  p: 1.2,
+                  borderRadius: "14px",
+                  bgcolor: "#ECFDF3",
+                  border: "1px solid #BBF7D0",
+                }}
+              >
+                <CheckCircleRoundedIcon
+                  sx={{ color: "#16A34A", fontSize: 20 }}
+                />
+                <Typography
+                  sx={{ fontSize: 12.5, fontWeight: 700, color: "#166534" }}
+                >
+                  Pin placed — drag it to adjust.
+                </Typography>
+              </Box>
+            )}
+
+            <Button
+              onClick={() => {
+                setManualMode(false);
+                setError("");
+              }}
+              sx={{
+                mt: 1,
+                px: 0,
+                textTransform: "none",
+                fontWeight: 700,
+                color: BRAND,
+              }}
+            >
+              ← Back to search
+            </Button>
+          </Box>
+        ) : (
+          <Button
+            onClick={() => {
+              setManualMode(true);
+              setSelected(null);
+              setError("");
+            }}
+            startIcon={<PlaceRoundedIcon />}
+            sx={{
+              mt: 1,
+              px: 0,
+              textTransform: "none",
+              fontWeight: 700,
+              color: BRAND,
+            }}
+          >
+            Can&apos;t find your school? Pin it on the map
+          </Button>
+        )}
+
+        <Typography
+          sx={{ mt: 1.75, fontSize: 11, color: MUTED, textAlign: "right" }}
+        >
+          Search by Photon · Data © OpenStreetMap contributors
+        </Typography>
+      </DialogContent>
+
+      <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+        <Button
+          onClick={onClose}
+          sx={{ color: MUTED, fontWeight: 700, textTransform: "none" }}
+        >
+          Cancel
+        </Button>
+
+        <Button
+          variant="contained"
+          disableElevation
+          disabled={!canContinue}
+          onClick={() => onConfirm(manualMode ? manualPlace : selected)}
+          startIcon={<DownloadRoundedIcon />}
+          sx={{
+            bgcolor: BRAND,
+            fontWeight: 800,
+            textTransform: "none",
+            borderRadius: "12px",
+            px: 2.5,
+            "&:hover": { bgcolor: BRAND_DARK },
+          }}
+        >
+          Continue to download
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 const DownloadContext = createContext(null);
 
 function useDownload() {
@@ -191,6 +1046,59 @@ function DownloadProvider({ children }) {
   const [downloadCount, setDownloadCount] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [locations, setLocations] = useState([]);
+
+  // Per-school download totals for the Philippines map. Polled so a new
+  // download from any visitor shows up on the map without a refresh.
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLocations = async () => {
+      try {
+        const rows = await fetchSchoolSummary();
+        if (!cancelled) setLocations(rows);
+      } catch {
+        // The map is a nice-to-have — keep whatever we already have.
+      }
+    };
+
+    loadLocations();
+    const interval = setInterval(loadLocations, 30000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Adds a just-recorded download to the map immediately, instead of
+  // waiting for the next poll.
+  const addLocalLocation = (place) => {
+    setLocations((current) => {
+      const existing = current.find((row) => row.place_id === place.placeId);
+
+      if (existing) {
+        return current.map((row) =>
+          row.place_id === place.placeId
+            ? { ...row, downloads: row.downloads + 1 }
+            : row
+        );
+      }
+
+      return [
+        ...current,
+        {
+          place_id: place.placeId,
+          school_name: place.name,
+          address: place.address,
+          lat: place.lat,
+          lng: place.lng,
+          downloads: 1,
+        },
+      ];
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -200,10 +1108,22 @@ function DownloadProvider({ children }) {
         const response = await fetch(
           `${DOWNLOAD_COUNTER_API}/get/${DOWNLOAD_COUNTER_KEY}`
         );
+
+        // A brand-new counter key answers 404 until the first download.
+        if (response.status === 404) {
+          if (!cancelled) setDownloadCount((current) => current ?? 0);
+          return;
+        }
+
         const data = await response.json();
 
-        if (!cancelled && typeof data.value === "number") {
-          setDownloadCount(data.value);
+        if (!cancelled) {
+          if (typeof data.value === "number") {
+            setDownloadCount(data.value);
+          } else {
+            // A brand-new counter key has no hits yet — that's zero.
+            setDownloadCount((current) => current ?? 0);
+          }
         }
       } catch (error) {
         // The counter is a nice-to-have — fail silently.
@@ -222,108 +1142,70 @@ function DownloadProvider({ children }) {
     };
   }, []);
 
-  // Same-origin download: fetch + stream the response so we can show
-  // real byte-by-byte progress, then save it as a named Blob. This is
-  // the original approach, unchanged — it only works same-origin
-  // because reading response bytes with fetch() requires a CORS
-  // allow-origin header the server grants to its own page.
-  const downloadSameOrigin = async () => {
-    const response = await fetch(APP_DOWNLOAD_URL);
-
-    if (!response.ok || !response.body) {
-      throw new Error("Download request failed");
-    }
-
-    const contentLength = response.headers.get("Content-Length");
-    const total = contentLength ? parseInt(contentLength, 10) : 0;
-
-    const reader = response.body.getReader();
-    const chunks = [];
-    let received = 0;
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) break;
-
-      chunks.push(value);
-      received += value.length;
-
-      if (total) {
-        setProgress(Math.min(99, Math.round((received / total) * 100)));
-      } else {
-        // No Content-Length header to measure against — creep
-        // the bar forward so it still reads as "in progress".
-        setProgress((prev) => (prev < 90 ? prev + 3 : prev));
-      }
-    }
-
-    const blob = new Blob(chunks);
-    const blobUrl = URL.createObjectURL(blob);
-
-    const link = document.createElement("a");
-    link.href = blobUrl;
-    link.download = APP_DOWNLOAD_FILENAME;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
-
-    setProgress(100);
-  };
-
-  // Cross-origin download (e.g. a GitHub Releases asset): fetch()
-  // can't read the response bytes here — the browser blocks it with
-  // a CORS error before any data arrives, since GitHub's asset host
-  // doesn't send an Access-Control-Allow-Origin header for arbitrary
-  // origins. A plain navigation click is NOT subject to CORS, and
-  // GitHub serves release assets with `Content-Disposition:
-  // attachment`, so the browser still shows a real "Save As"/download
-  // instead of navigating away. Two trade-offs vs. the same-origin
-  // path: the `download` attribute (custom filename) is ignored
-  // cross-origin, so the saved file keeps whatever name GitHub gave
-  // the asset, and real byte progress can't be measured, so we
-  // animate a short simulated progress bar purely for UI feedback.
-  const downloadCrossOrigin = async () => {
-    await new Promise((resolve) => {
-      let simulated = 0;
-
-      const interval = setInterval(() => {
-        simulated = Math.min(92, simulated + Math.random() * 18 + 7);
-        setProgress(Math.round(simulated));
-
-        if (simulated >= 92) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 140);
-    });
-
-    const link = document.createElement("a");
-    link.href = APP_DOWNLOAD_URL;
-    // Harmless to set even though cross-origin browsers ignore it.
-    link.download = APP_DOWNLOAD_FILENAME;
-    link.rel = "noopener";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    setProgress(100);
-  };
-
-  const triggerDownload = async () => {
+  const startDownload = async (place) => {
     if (isDownloading) return;
 
     setIsDownloading(true);
     setProgress(0);
 
     try {
-      if (isSameOriginDownloadUrl(APP_DOWNLOAD_URL)) {
-        await downloadSameOrigin();
-      } else {
-        await downloadCrossOrigin();
+      const response = await fetch(APP_DOWNLOAD_URL);
+
+      if (!response.ok || !response.body) {
+        throw new Error("Download request failed");
+      }
+
+      const contentLength = response.headers.get("Content-Length");
+      const total = contentLength
+        ? parseInt(contentLength, 10)
+        : 0;
+
+      const reader = response.body.getReader();
+      const chunks = [];
+      let received = 0;
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) break;
+
+        chunks.push(value);
+        received += value.length;
+
+        if (total) {
+          setProgress(
+            Math.min(99, Math.round((received / total) * 100))
+          );
+        } else {
+          // No Content-Length header to measure against — creep
+          // the bar forward so it still reads as "in progress".
+          setProgress((prev) => (prev < 90 ? prev + 3 : prev));
+        }
+      }
+
+      const blob = new Blob(chunks);
+      const blobUrl = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = APP_DOWNLOAD_FILENAME;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+
+      setProgress(100);
+
+      // Record which school this download came from (best effort —
+      // only counted once the download actually succeeded).
+      if (place) {
+        saveDownloadLocation(place)
+          .then((saved) => {
+            if (saved) addLocalLocation(place);
+          })
+          .catch(() => {});
       }
 
       // Best-effort count increment — doesn't block success feedback.
@@ -362,6 +1244,17 @@ function DownloadProvider({ children }) {
     }
   };
 
+  // Every download button calls this: ask for the school first.
+  const triggerDownload = () => {
+    if (isDownloading) return;
+    setPickerOpen(true);
+  };
+
+  const handleSchoolConfirmed = (place) => {
+    setPickerOpen(false);
+    startDownload(place);
+  };
+
   return (
     <DownloadContext.Provider
       value={{
@@ -369,9 +1262,16 @@ function DownloadProvider({ children }) {
         isDownloading,
         progress,
         triggerDownload,
+        locations,
       }}
     >
       {children}
+
+      <SchoolPickerDialog
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onConfirm={handleSchoolConfirmed}
+      />
     </DownloadContext.Provider>
   );
 }
@@ -565,6 +1465,7 @@ export default function LandingPage() {
           <Features />
           <LearnSection />
           <Faq />
+          <LearnersMapSection />
           <DownloadSection />
         </main>
 
@@ -2563,6 +3464,453 @@ function Faq() {
 /* =========================================================
    DOWNLOAD CTA
    ========================================================= */
+
+/* =========================================================
+   WHERE LEARNERS COME FROM — Philippines map (Leaflet + OSM)
+   One pin per school; pins appear automatically as new
+   downloads are recorded.
+   ========================================================= */
+
+function buildMarkerContent(count) {
+  const size = Math.min(46, 24 + Math.sqrt(count) * 6);
+  const el = document.createElement("div");
+
+  Object.assign(el.style, {
+    width: `${size}px`,
+    height: `${size}px`,
+    borderRadius: "50%",
+    background: BRAND,
+    border: "3px solid #fff",
+    boxShadow: "0 4px 14px rgba(36,79,196,.45)",
+    color: "#fff",
+    display: "grid",
+    placeItems: "center",
+    fontSize: "12px",
+    fontWeight: "800",
+    cursor: "pointer",
+    boxSizing: "border-box",
+  });
+
+  el.textContent = count > 1 ? String(count) : "";
+
+  return { el, size };
+}
+
+function buildMarkerIcon(L, count) {
+  const { el, size } = buildMarkerContent(count);
+
+  return {
+    el,
+    icon: L.divIcon({
+      html: el,
+      className: "gregg-school-pin",
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -size / 2],
+    }),
+  };
+}
+
+function buildInfoContent(loc) {
+  const wrap = document.createElement("div");
+  wrap.style.maxWidth = "220px";
+  wrap.style.color = TEXT;
+
+  // textContent (not innerHTML) — school names are user-submitted data.
+  const name = document.createElement("div");
+  name.style.fontWeight = "800";
+  name.textContent = loc.school_name;
+
+  const address = document.createElement("div");
+  address.style.fontSize = "12px";
+  address.style.color = MUTED;
+  address.textContent = loc.address || "";
+
+  const count = document.createElement("div");
+  count.style.marginTop = "4px";
+  count.style.fontSize = "12.5px";
+  count.style.fontWeight = "700";
+  count.style.color = BRAND;
+  count.textContent = `${loc.downloads} download${
+    loc.downloads === 1 ? "" : "s"
+  }`;
+
+  wrap.append(name, address, count);
+
+  return wrap;
+}
+
+function LearnersMapSection() {
+  const { locations } = useDownload();
+
+  const mapElRef = useRef(null);
+  const mapRef = useRef(null);
+  const leafletRef = useRef(null);
+  const markersRef = useRef(new Map());
+  const firstSyncDoneRef = useRef(false);
+
+  const [mapState, setMapState] = useState("loading"); // loading | ready | error
+
+  // Create the map once.
+  useEffect(() => {
+    let cancelled = false;
+
+    loadLeaflet()
+      .then((L) => {
+        if (cancelled || !mapElRef.current) return;
+
+        const map = L.map(mapElRef.current, {
+          minZoom: 5,
+          maxZoom: 17,
+          maxBounds: [
+            [0, 108],
+            [27, 134],
+          ],
+          maxBoundsViscosity: 0.8,
+          scrollWheelZoom: false, // don't hijack page scrolling
+          dragging: !L.Browser.mobile, // one-finger scroll stays with the page
+          attributionControl: true,
+        });
+
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
+        }).addTo(map);
+
+        map.fitBounds([
+          [PH_BOUNDS.south + 0.2, PH_BOUNDS.west + 0.5],
+          [PH_BOUNDS.north - 0.3, PH_BOUNDS.east - 0.2],
+        ]);
+
+        leafletRef.current = L;
+        mapRef.current = map;
+        setMapState("ready");
+
+        // The container may still be settling its size.
+        setTimeout(() => map.invalidateSize(), 150);
+      })
+      .catch(() => {
+        if (!cancelled) setMapState("error");
+      });
+
+    return () => {
+      cancelled = true;
+
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+
+      markersRef.current.clear();
+    };
+  }, []);
+
+  // Keep the pins in sync with the data.
+  useEffect(() => {
+    if (mapState !== "ready") return;
+
+    const L = leafletRef.current;
+    const map = mapRef.current;
+    const pins = markersRef.current;
+    const seen = new Set();
+
+    locations.forEach((loc) => {
+      seen.add(loc.place_id);
+
+      const existing = pins.get(loc.place_id);
+
+      if (existing) {
+        existing.marker.setPopupContent(buildInfoContent(loc));
+
+        if (existing.count !== loc.downloads) {
+          existing.count = loc.downloads;
+          existing.marker.setIcon(buildMarkerIcon(L, loc.downloads).icon);
+        }
+
+        return;
+      }
+
+      const { el, icon } = buildMarkerIcon(L, loc.downloads);
+
+      const marker = L.marker([loc.lat, loc.lng], {
+        icon,
+        title: loc.school_name,
+      })
+        .addTo(map)
+        .bindPopup(buildInfoContent(loc));
+
+      // Pop in new pins (but not the whole first batch on page load).
+      if (firstSyncDoneRef.current && el.animate) {
+        el.animate(
+          [
+            { transform: "scale(0)" },
+            { transform: "scale(1.3)" },
+            { transform: "scale(1)" },
+          ],
+          { duration: 600, easing: "ease-out" }
+        );
+      }
+
+      pins.set(loc.place_id, { marker, count: loc.downloads });
+    });
+
+    pins.forEach((entry, placeId) => {
+      if (!seen.has(placeId)) {
+        entry.marker.remove();
+        pins.delete(placeId);
+      }
+    });
+
+    firstSyncDoneRef.current = true;
+  }, [locations, mapState]);
+
+  const totalDownloads = locations.reduce(
+    (sum, loc) => sum + loc.downloads,
+    0
+  );
+  const topSchools = locations.slice(0, 5);
+
+  return (
+    <Box
+      id="learners-map"
+      sx={{
+        scrollMarginTop: 100,
+        pb: { xs: 8, md: 10 },
+      }}
+    >
+      <Box sx={{ width: "100%", maxWidth: 1180, mx: "auto" }}>
+        <Box sx={{ textAlign: "center", mb: { xs: 3.5, md: 5 } }}>
+          <Chip
+            icon={<PlaceRoundedIcon sx={{ fontSize: 17 }} />}
+            label="Our community"
+            sx={{
+              bgcolor: "#fff",
+              color: BRAND,
+              fontWeight: 800,
+              border: `1px solid ${BORDER}`,
+              mb: 2,
+            }}
+          />
+
+          <Typography
+            component="h2"
+            sx={{
+              fontWeight: 900,
+              letterSpacing: "-0.035em",
+              fontSize: { xs: 28, sm: 34, md: 40 },
+              lineHeight: 1.15,
+              color: TEXT,
+              mb: 1.5,
+            }}
+          >
+            Learners across
+            <Box component="span" sx={{ color: BRAND, ml: 1 }}>
+              the Philippines.
+            </Box>
+          </Typography>
+
+          <Typography
+            sx={{
+              color: MUTED,
+              maxWidth: 560,
+              mx: "auto",
+              fontSize: { xs: 15, md: 16.5 },
+              lineHeight: 1.7,
+            }}
+          >
+            Every pin is a school or university where someone downloaded
+            Gregg Dictionary.
+          </Typography>
+        </Box>
+
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", md: "1fr 300px" },
+            gap: 2,
+          }}
+        >
+          <Box
+            sx={{
+              position: "relative",
+              height: { xs: 380, md: 520 },
+              borderRadius: { xs: "22px", md: "28px" },
+              overflow: "hidden",
+              border: `1px solid ${BORDER}`,
+              bgcolor: BRAND_LIGHT,
+              boxShadow: "0 18px 45px rgba(36,79,196,.10)",
+              isolation: "isolate",
+            }}
+          >
+            <Box ref={mapElRef} sx={{ position: "absolute", inset: 0 }} />
+
+            {mapState === "loading" && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 1000,
+                  display: "grid",
+                  placeItems: "center",
+                  pointerEvents: "none",
+                }}
+              >
+                <CircularProgress size={28} sx={{ color: BRAND }} />
+              </Box>
+            )}
+
+            {mapState === "error" && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  inset: 0,
+                  zIndex: 1000,
+                  display: "grid",
+                  placeItems: "center",
+                  p: 3,
+                  textAlign: "center",
+                }}
+              >
+                <Typography sx={{ color: MUTED, fontSize: 14 }}>
+                  The map couldn&apos;t be loaded right now.
+                </Typography>
+              </Box>
+            )}
+
+            {mapState === "ready" && locations.length === 0 && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  left: "50%",
+                  bottom: 34,
+                  transform: "translateX(-50%)",
+                  zIndex: 1000,
+                  px: 2,
+                  py: 1,
+                  borderRadius: "999px",
+                  bgcolor: "rgba(255,255,255,.95)",
+                  border: `1px solid ${BORDER}`,
+                  boxShadow: "0 6px 18px rgba(30,49,87,.12)",
+                  pointerEvents: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <Typography
+                  sx={{ fontSize: 12.5, fontWeight: 700, color: TEXT }}
+                >
+                  No schools pinned yet — be the first!
+                </Typography>
+              </Box>
+            )}
+          </Box>
+
+          <Box
+            sx={{
+              borderRadius: { xs: "22px", md: "28px" },
+              bgcolor: "#fff",
+              border: `1px solid ${BORDER}`,
+              p: 2.5,
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+            }}
+          >
+            <Box sx={{ display: "flex", gap: 3 }}>
+              <Box>
+                <Typography
+                  sx={{ fontWeight: 900, fontSize: 28, color: TEXT }}
+                >
+                  {locations.length.toLocaleString()}
+                </Typography>
+                <Typography sx={{ fontSize: 12.5, color: MUTED }}>
+                  schools
+                </Typography>
+              </Box>
+
+              <Box>
+                <Typography
+                  sx={{ fontWeight: 900, fontSize: 28, color: TEXT }}
+                >
+                  {totalDownloads.toLocaleString()}
+                </Typography>
+                <Typography sx={{ fontSize: 12.5, color: MUTED }}>
+                  downloads
+                </Typography>
+              </Box>
+            </Box>
+
+            <Box>
+              <Typography
+                sx={{
+                  fontSize: 11.5,
+                  fontWeight: 800,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  color: MUTED,
+                  mb: 1,
+                }}
+              >
+                Top schools
+              </Typography>
+
+              {topSchools.length === 0 ? (
+                <Typography sx={{ fontSize: 13.5, color: MUTED }}>
+                  Schools will appear here after the first downloads.
+                </Typography>
+              ) : (
+                topSchools.map((loc, index) => (
+                  <Box
+                    key={loc.place_id}
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1.25,
+                      py: 0.9,
+                      borderTop: index === 0 ? 0 : `1px solid ${BORDER}`,
+                    }}
+                  >
+                    <Typography
+                      sx={{
+                        width: 18,
+                        fontWeight: 800,
+                        fontSize: 13,
+                        color: BRAND,
+                      }}
+                    >
+                      {index + 1}
+                    </Typography>
+
+                    <Typography
+                      sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontSize: 13.5,
+                        fontWeight: 650,
+                        color: TEXT,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {loc.school_name}
+                    </Typography>
+
+                    <Typography
+                      sx={{ fontSize: 13, fontWeight: 800, color: MUTED }}
+                    >
+                      {loc.downloads}
+                    </Typography>
+                  </Box>
+                ))
+              )}
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
 
 function DownloadSection() {
   const { triggerDownload, isDownloading } = useDownload();
