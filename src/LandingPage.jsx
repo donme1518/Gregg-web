@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   createContext,
@@ -22,6 +23,7 @@ import DialogActions from "@mui/material/DialogActions";
 import Autocomplete from "@mui/material/Autocomplete";
 import TextField from "@mui/material/TextField";
 import CircularProgress from "@mui/material/CircularProgress";
+import InputAdornment from "@mui/material/InputAdornment";
 
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
@@ -45,6 +47,9 @@ import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
 import EmailRoundedIcon from "@mui/icons-material/EmailRounded";
 import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
 import PlaceRoundedIcon from "@mui/icons-material/PlaceRounded";
+import FavoriteRoundedIcon from "@mui/icons-material/FavoriteRounded";
+import LockRoundedIcon from "@mui/icons-material/LockRounded";
+import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
 
 /*
  * Gregg Dictionary Landing Page
@@ -125,6 +130,22 @@ const PH_BOUNDS = { north: 21.5, south: 4.4, west: 116.0, east: 127.0 };
 
 // Get a free access key at https://web3forms.com and paste it here.
 const WEB3FORMS_ACCESS_KEY = "1f7b9bb3-d70d-49ed-908a-b1326d344706";
+
+/* ---- Donations (PayMongo, QR Ph) ----
+ * The donor picks an amount here; /api/donate (a Vercel serverless function,
+ * see api/donate.js) creates a PayMongo Checkout Session with your SECRET key
+ * and we redirect the donor to PayMongo's hosted checkout page, where they
+ * scan a QR Ph code with any bank or e-wallet app.
+ *
+ * Optional fallback: set VITE_PAYMONGO_LINK to a PayMongo Payment Link
+ * (dashboard -> Payment Links). It is used when /api/donate isn't available
+ * (for example on plain `npm run dev`).
+ */
+const DONATE_API = ENV.VITE_DONATE_API || "/api/donate";
+const PAYMONGO_LINK = ENV.VITE_PAYMONGO_LINK || "";
+const DONATE_AMOUNTS = [50, 100, 250, 500];
+const DONATE_MIN = 20; // PHP
+const DONATE_MAX = 50000; // PHP
 
 const BRAND = "#3869E8";
 const BRAND_DARK = "#244FC4";
@@ -1533,6 +1554,7 @@ export default function LandingPage() {
           <Faq />
           <LearnersMapSection />
           <DownloadSection />
+          <DonateSection />
         </main>
 
         <Footer />
@@ -1569,6 +1591,11 @@ function Nav() {
       label: "FAQ",
       id: "faq",
       icon: <HelpOutlineRoundedIcon sx={{ fontSize: 19 }} />,
+    },
+    {
+      label: "Donate",
+      id: "donate",
+      icon: <FavoriteRoundedIcon sx={{ fontSize: 19 }} />,
     },
   ];
 
@@ -3538,7 +3565,8 @@ function Faq() {
    ========================================================= */
 
 function buildMarkerContent(count) {
-  const size = Math.min(46, 24 + Math.sqrt(count) * 6);
+  // Small, unobtrusive dots: ~18px for one download, growing gently to 26px.
+  const size = Math.round(Math.min(26, 15 + Math.sqrt(count) * 2.5));
   const el = document.createElement("div");
 
   Object.assign(el.style, {
@@ -3546,12 +3574,13 @@ function buildMarkerContent(count) {
     height: `${size}px`,
     borderRadius: "50%",
     background: BRAND,
-    border: "3px solid #fff",
-    boxShadow: "0 4px 14px rgba(36,79,196,.45)",
+    border: "2px solid #fff",
+    boxShadow: "0 2px 8px rgba(36,79,196,.4)",
     color: "#fff",
     display: "grid",
     placeItems: "center",
-    fontSize: "12px",
+    fontSize: "10px",
+    lineHeight: "1",
     fontWeight: "800",
     cursor: "pointer",
     boxSizing: "border-box",
@@ -3606,6 +3635,561 @@ function buildInfoContent(loc) {
   return wrap;
 }
 
+/* ---- Island group (estimated from a pin's coordinates) ---- */
+
+const ISLAND_GROUPS = [
+  { key: "Luzon", color: BRAND_DEEP },
+  { key: "Visayas", color: BRAND },
+  { key: "Mindanao", color: "#8FAEFF" },
+];
+
+function getIslandGroup(lat, lng) {
+  // Palawan, Mindoro, Romblon and everything north of Bicol -> Luzon group.
+  if (lat >= 12.6 || lng < 119 || (lat >= 12 && lng < 122.4)) return "Luzon";
+
+  // Southern Philippines -> Mindanao group (incl. Camiguin, Surigao, Dinagat).
+  if (
+    lat < 9 ||
+    (lat < 9.3 && lng >= 124) ||
+    (lat < 10.3 && lng >= 124.9)
+  ) {
+    return "Mindanao";
+  }
+
+  return "Visayas";
+}
+
+function shortPlace(address) {
+  return (address || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(-2)
+    .join(", ");
+}
+
+// Smoothly counts a number up/down when the data changes.
+function useCountUp(value, duration = 700) {
+  const [display, setDisplay] = useState(value);
+  const fromRef = useRef(value);
+
+  useEffect(() => {
+    const from = fromRef.current;
+
+    if (from === value) return undefined;
+
+    let frame;
+    const startedAt = performance.now();
+
+    const tick = (now) => {
+      const t = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = t === 1 ? value : Math.round(from + (value - from) * eased);
+
+      fromRef.current = next;
+      setDisplay(next);
+
+      if (t < 1) frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+
+    return () => cancelAnimationFrame(frame);
+  }, [value, duration]);
+
+  return display;
+}
+
+function PanelTitle({ children, caption }) {
+  return (
+    <Box sx={{ mb: 1.1 }}>
+      <Typography
+        sx={{
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: "0.07em",
+          textTransform: "uppercase",
+          color: MUTED,
+        }}
+      >
+        {children}
+      </Typography>
+
+      {caption && (
+        <Typography sx={{ fontSize: 11.5, color: MUTED, opacity: 0.8 }}>
+          {caption}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+function CommunityInsights({ locations, totalDownloads, onFocus }) {
+  const schools = locations.length;
+  const animatedSchools = useCountUp(schools);
+  const animatedDownloads = useCountUp(totalDownloads);
+  const average = schools ? totalDownloads / schools : 0;
+
+  const topSchools = useMemo(
+    () =>
+      [...locations].sort((a, b) => b.downloads - a.downloads).slice(0, 5),
+    [locations]
+  );
+
+  const groups = useMemo(() => {
+    const totals = { Luzon: 0, Visayas: 0, Mindanao: 0 };
+
+    locations.forEach((loc) => {
+      totals[getIslandGroup(loc.lat, loc.lng)] += loc.downloads;
+    });
+
+    return ISLAND_GROUPS.map((group) => ({
+      ...group,
+      value: totals[group.key],
+    }));
+  }, [locations]);
+
+  const topDownloads = topSchools[0]?.downloads || 1;
+
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        borderRadius: { xs: "22px", md: "28px" },
+        bgcolor: "#fff",
+        border: `1px solid ${BORDER}`,
+        boxShadow: "0 18px 45px rgba(36,79,196,.08)",
+        overflow: "hidden",
+        height: { md: 520 },
+        minHeight: 0,
+      }}
+    >
+      {/* ---------- Header: live totals ---------- */}
+      <Box
+        sx={{
+          position: "relative",
+          overflow: "hidden",
+          color: "#fff",
+          px: 2.25,
+          pt: 2.1,
+          pb: 2.25,
+          background: `linear-gradient(135deg, ${BRAND_DEEP} 0%, ${BRAND} 100%)`,
+        }}
+      >
+        <Box
+          sx={{
+            position: "absolute",
+            width: 180,
+            height: 180,
+            borderRadius: "50%",
+            bgcolor: "rgba(255,255,255,.07)",
+            top: -90,
+            right: -60,
+          }}
+        />
+
+        <Box
+          sx={{
+            position: "relative",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            mb: 1.5,
+          }}
+        >
+          <Typography
+            sx={{
+              fontSize: 11.5,
+              fontWeight: 800,
+              letterSpacing: "0.07em",
+              textTransform: "uppercase",
+              color: "rgba(255,255,255,.82)",
+            }}
+          >
+            Community snapshot
+          </Typography>
+
+          <Box
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.7,
+              px: 1,
+              py: 0.3,
+              borderRadius: "999px",
+              bgcolor: "rgba(255,255,255,.14)",
+            }}
+          >
+            <Box
+              sx={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                bgcolor: "#4ADE80",
+                animation: "greggLivePulse 1.8s infinite",
+                "@keyframes greggLivePulse": {
+                  "0%": { boxShadow: "0 0 0 0 rgba(74,222,128,.6)" },
+                  "70%": { boxShadow: "0 0 0 7px rgba(74,222,128,0)" },
+                  "100%": { boxShadow: "0 0 0 0 rgba(74,222,128,0)" },
+                },
+              }}
+            />
+
+            <Typography
+              sx={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.07em" }}
+            >
+              LIVE
+            </Typography>
+          </Box>
+        </Box>
+
+        <Box
+          sx={{
+            position: "relative",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 1,
+          }}
+        >
+          {[
+            {
+              icon: <SchoolRoundedIcon sx={{ fontSize: 17 }} />,
+              value: animatedSchools,
+              label: "schools",
+            },
+            {
+              icon: <DownloadRoundedIcon sx={{ fontSize: 17 }} />,
+              value: animatedDownloads,
+              label: "downloads",
+            },
+          ].map((stat) => (
+            <Box
+              key={stat.label}
+              sx={{
+                borderRadius: "16px",
+                bgcolor: "rgba(255,255,255,.13)",
+                border: "1px solid rgba(255,255,255,.16)",
+                px: 1.5,
+                py: 1.25,
+              }}
+            >
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.6,
+                  color: "rgba(255,255,255,.8)",
+                }}
+              >
+                {stat.icon}
+
+                <Typography sx={{ fontSize: 12, fontWeight: 650 }}>
+                  {stat.label}
+                </Typography>
+              </Box>
+
+              <Typography
+                sx={{
+                  fontWeight: 900,
+                  fontSize: 30,
+                  lineHeight: 1.15,
+                  letterSpacing: "-0.02em",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {stat.value.toLocaleString()}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+
+        {schools > 0 && (
+          <Typography
+            sx={{
+              position: "relative",
+              mt: 1.25,
+              fontSize: 12,
+              color: "rgba(255,255,255,.78)",
+            }}
+          >
+            About{" "}
+            <Box component="strong" sx={{ color: "#fff" }}>
+              {average.toFixed(1)}
+            </Box>{" "}
+            downloads per school
+          </Typography>
+        )}
+      </Box>
+
+      {/* ---------- Body ---------- */}
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          px: 2.25,
+          py: 2.1,
+          display: "flex",
+          flexDirection: "column",
+          gap: 2.5,
+          "&::-webkit-scrollbar": { width: 6 },
+          "&::-webkit-scrollbar-thumb": {
+            bgcolor: BORDER,
+            borderRadius: 3,
+          },
+        }}
+      >
+        {schools === 0 ? (
+          <Box
+            sx={{
+              textAlign: "center",
+              border: `1.5px dashed ${BORDER}`,
+              borderRadius: "18px",
+              px: 2,
+              py: 3.5,
+            }}
+          >
+            <PlaceRoundedIcon sx={{ color: BRAND, fontSize: 30, mb: 0.5 }} />
+
+            <Typography sx={{ fontWeight: 800, color: TEXT, fontSize: 14.5 }}>
+              No schools yet
+            </Typography>
+
+            <Typography sx={{ color: MUTED, fontSize: 13, mt: 0.5 }}>
+              Insights appear here after the first downloads.
+            </Typography>
+          </Box>
+        ) : (
+          <>
+            {/* Island groups */}
+            <Box>
+              <PanelTitle caption="Estimated from each pin's location">
+                By island group
+              </PanelTitle>
+
+              <Box
+                sx={{
+                  display: "flex",
+                  height: 10,
+                  borderRadius: "999px",
+                  overflow: "hidden",
+                  bgcolor: BRAND_LIGHT,
+                }}
+              >
+                {groups.map(
+                  (group) =>
+                    group.value > 0 && (
+                      <Box
+                        key={group.key}
+                        sx={{
+                          width: `${(group.value / totalDownloads) * 100}%`,
+                          bgcolor: group.color,
+                          transition: "width .6s ease",
+                        }}
+                      />
+                    )
+                )}
+              </Box>
+
+              <Box
+                sx={{
+                  mt: 1.25,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 1,
+                }}
+              >
+                {groups.map((group) => (
+                  <Box key={group.key}>
+                    <Box
+                      sx={{ display: "flex", alignItems: "center", gap: 0.7 }}
+                    >
+                      <Box
+                        sx={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          bgcolor: group.color,
+                        }}
+                      />
+
+                      <Typography
+                        sx={{ fontSize: 12, fontWeight: 700, color: MUTED }}
+                      >
+                        {group.key}
+                      </Typography>
+                    </Box>
+
+                    <Typography
+                      sx={{
+                        mt: 0.2,
+                        fontSize: 15,
+                        fontWeight: 850,
+                        color: TEXT,
+                        lineHeight: 1.25,
+                      }}
+                    >
+                      {group.value.toLocaleString()}
+                      <Box
+                        component="span"
+                        sx={{
+                          ml: 0.6,
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          color: MUTED,
+                        }}
+                      >
+                        {Math.round((group.value / totalDownloads) * 100)}%
+                      </Box>
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+
+            {/* Leaderboard */}
+            <Box>
+              <PanelTitle caption="Tap a school to find it on the map">
+                Top schools
+              </PanelTitle>
+
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+                {topSchools.map((loc, index) => {
+                  const share = Math.round(
+                    (loc.downloads / totalDownloads) * 100
+                  );
+
+                  return (
+                    <Box
+                      key={loc.place_id}
+                      component="button"
+                      type="button"
+                      onClick={() => onFocus(loc)}
+                      aria-label={`Show ${loc.school_name} on the map`}
+                      sx={{
+                        all: "unset",
+                        boxSizing: "border-box",
+                        width: "100%",
+                        cursor: "pointer",
+                        borderRadius: "14px",
+                        px: 1,
+                        py: 1,
+                        display: "grid",
+                        gridTemplateColumns: "24px minmax(0, 1fr) auto",
+                        columnGap: 1.1,
+                        alignItems: "center",
+                        transition: "background-color .15s ease",
+                        "&:hover, &:focus-visible": {
+                          bgcolor: BRAND_LIGHT,
+                        },
+                        "&:focus-visible": {
+                          outline: `2px solid ${BRAND}`,
+                        },
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: "50%",
+                          display: "grid",
+                          placeItems: "center",
+                          fontSize: 12,
+                          fontWeight: 850,
+                          bgcolor: index === 0 ? BRAND : BRAND_LIGHT,
+                          color: index === 0 ? "#fff" : BRAND,
+                        }}
+                      >
+                        {index === 0 ? (
+                          <EmojiEventsRoundedIcon sx={{ fontSize: 14 }} />
+                        ) : (
+                          index + 1
+                        )}
+                      </Box>
+
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography
+                          sx={{
+                            fontSize: 13.5,
+                            fontWeight: 750,
+                            color: TEXT,
+                            lineHeight: 1.3,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {loc.school_name}
+                        </Typography>
+
+                        {shortPlace(loc.address) && (
+                          <Typography
+                            sx={{
+                              fontSize: 11.5,
+                              color: MUTED,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {shortPlace(loc.address)}
+                          </Typography>
+                        )}
+                      </Box>
+
+                      <Box sx={{ textAlign: "right" }}>
+                        <Typography
+                          sx={{
+                            fontSize: 14,
+                            fontWeight: 850,
+                            color: TEXT,
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          {loc.downloads.toLocaleString()}
+                        </Typography>
+
+                        <Typography sx={{ fontSize: 11, color: MUTED }}>
+                          {share}%
+                        </Typography>
+                      </Box>
+
+                      <Box
+                        sx={{
+                          gridColumn: "2 / 4",
+                          mt: 0.8,
+                          height: 4,
+                          borderRadius: "999px",
+                          bgcolor: BRAND_LIGHT,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            height: "100%",
+                            width: `${Math.max(
+                              6,
+                              (loc.downloads / topDownloads) * 100
+                            )}%`,
+                            borderRadius: "999px",
+                            background: `linear-gradient(90deg, ${BRAND}, #8FAEFF)`,
+                            transition: "width .6s ease",
+                          }}
+                        />
+                      </Box>
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          </>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
 function LearnersMapSection() {
   const { locations } = useDownload();
 
@@ -3616,14 +4200,18 @@ function LearnersMapSection() {
   const firstSyncDoneRef = useRef(false);
 
   const [mapState, setMapState] = useState("loading"); // loading | ready | error
+  const [mapHint, setMapHint] = useState(null);
 
   // Create the map once.
   useEffect(() => {
     let cancelled = false;
+    let cleanupGestures = () => {};
 
     loadLeaflet()
       .then((L) => {
         if (cancelled || !mapElRef.current) return;
+
+        const isTouch = Boolean(L.Browser.mobile);
 
         const map = L.map(mapElRef.current, {
           minZoom: 5,
@@ -3633,8 +4221,22 @@ function LearnersMapSection() {
             [27, 134],
           ],
           maxBoundsViscosity: 0.8,
-          scrollWheelZoom: false, // don't hijack page scrolling
-          dragging: !L.Browser.mobile, // one-finger scroll stays with the page
+
+          // Smooth, fractional zoom so pinching feels natural.
+          zoomSnap: 0.25,
+          zoomDelta: 0.5,
+          bounceAtZoomLimits: false,
+
+          // Pinch-to-zoom on touch screens (two fingers also pan the map).
+          touchZoom: true,
+
+          // Plain mouse-wheel scrolling keeps scrolling the PAGE; zooming
+          // uses Ctrl/Cmd + wheel (or a trackpad pinch) — see onWheel below.
+          scrollWheelZoom: false,
+
+          // On phones one finger scrolls the page; two fingers drive the map.
+          dragging: !isTouch,
+
           attributionControl: true,
         });
 
@@ -3649,6 +4251,69 @@ function LearnersMapSection() {
           [PH_BOUNDS.north - 0.3, PH_BOUNDS.east - 0.2],
         ]);
 
+        /* ---- gestures: trackpad pinch / Ctrl+wheel + touch hints ---- */
+        const container = map.getContainer();
+        let hintTimer = null;
+
+        const hideHint = () => {
+          clearTimeout(hintTimer);
+          hintTimer = null;
+          setMapHint(null);
+        };
+
+        const showHint = (text, ms) => {
+          clearTimeout(hintTimer);
+          setMapHint(text);
+          hintTimer = setTimeout(() => {
+            hintTimer = null;
+            setMapHint(null);
+          }, ms);
+        };
+
+        // A trackpad pinch (and Ctrl/Cmd + mouse wheel) arrives as a wheel
+        // event with ctrlKey set. Zoom the map around the cursor instead of
+        // letting the browser zoom the whole page.
+        const onWheel = (event) => {
+          if (!event.ctrlKey && !event.metaKey) return;
+
+          event.preventDefault();
+
+          const step = Math.max(-0.75, Math.min(0.75, -event.deltaY * 0.02));
+
+          map.setZoomAround(
+            map.mouseEventToContainerPoint(event),
+            map.getZoom() + step,
+            { animate: false }
+          );
+
+          hideHint();
+        };
+
+        // One finger dragging on a phone scrolls the page — tell people how
+        // to move the map instead.
+        const onTouchMove = (event) => {
+          if (isTouch && event.touches.length === 1 && !hintTimer) {
+            showHint("Use two fingers to move and zoom the map", 1600);
+          }
+        };
+
+        container.addEventListener("wheel", onWheel, { passive: false });
+        container.addEventListener("touchmove", onTouchMove, { passive: true });
+        map.on("zoomstart", hideHint);
+
+        showHint(
+          isTouch
+            ? "Pinch with two fingers to zoom"
+            : "Ctrl + scroll or pinch to zoom",
+          7000
+        );
+
+        cleanupGestures = () => {
+          clearTimeout(hintTimer);
+          container.removeEventListener("wheel", onWheel);
+          container.removeEventListener("touchmove", onTouchMove);
+        };
+
         leafletRef.current = L;
         mapRef.current = map;
         setMapState("ready");
@@ -3662,6 +4327,7 @@ function LearnersMapSection() {
 
     return () => {
       cancelled = true;
+      cleanupGestures();
 
       if (mapRef.current) {
         mapRef.current.remove();
@@ -3671,6 +4337,28 @@ function LearnersMapSection() {
       markersRef.current.clear();
     };
   }, []);
+
+  // Fly to a school (used by the leaderboard) and open its popup.
+  const focusSchool = (loc) => {
+    const map = mapRef.current;
+
+    if (!map) return;
+
+    // On phones the panel sits below the map — bring the map into view.
+    if (window.innerWidth < 900 && mapElRef.current) {
+      mapElRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    const entry = markersRef.current.get(loc.place_id);
+
+    if (entry) {
+      map.once("moveend", () => entry.marker.openPopup());
+    }
+
+    map.flyTo([loc.lat, loc.lng], Math.max(map.getZoom(), 12), {
+      duration: 1.1,
+    });
+  };
 
   // Keep the pins in sync with the data.
   useEffect(() => {
@@ -3735,7 +4423,6 @@ function LearnersMapSection() {
     (sum, loc) => sum + loc.downloads,
     0
   );
-  const topSchools = locations.slice(0, 5);
 
   return (
     <Box
@@ -3811,6 +4498,33 @@ function LearnersMapSection() {
           >
             <Box ref={mapElRef} sx={{ position: "absolute", inset: 0 }} />
 
+            {mapState === "ready" && mapHint && (
+              <Box
+                sx={{
+                  position: "absolute",
+                  top: 12,
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  zIndex: 1000,
+                  px: 1.75,
+                  py: 0.75,
+                  borderRadius: "999px",
+                  bgcolor: "rgba(20,38,83,.88)",
+                  color: "#fff",
+                  fontSize: 12.5,
+                  fontWeight: 650,
+                  pointerEvents: "none",
+                  whiteSpace: "nowrap",
+                  maxWidth: "calc(100% - 24px)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  backdropFilter: "blur(6px)",
+                }}
+              >
+                {mapHint}
+              </Box>
+            )}
+
             {mapState === "loading" && (
               <Box
                 sx={{
@@ -3871,107 +4585,11 @@ function LearnersMapSection() {
             )}
           </Box>
 
-          <Box
-            sx={{
-              borderRadius: { xs: "22px", md: "28px" },
-              bgcolor: "#fff",
-              border: `1px solid ${BORDER}`,
-              p: 2.5,
-              display: "flex",
-              flexDirection: "column",
-              gap: 2,
-            }}
-          >
-            <Box sx={{ display: "flex", gap: 3 }}>
-              <Box>
-                <Typography
-                  sx={{ fontWeight: 900, fontSize: 28, color: TEXT }}
-                >
-                  {locations.length.toLocaleString()}
-                </Typography>
-                <Typography sx={{ fontSize: 12.5, color: MUTED }}>
-                  schools
-                </Typography>
-              </Box>
-
-              <Box>
-                <Typography
-                  sx={{ fontWeight: 900, fontSize: 28, color: TEXT }}
-                >
-                  {totalDownloads.toLocaleString()}
-                </Typography>
-                <Typography sx={{ fontSize: 12.5, color: MUTED }}>
-                  downloads
-                </Typography>
-              </Box>
-            </Box>
-
-            <Box>
-              <Typography
-                sx={{
-                  fontSize: 11.5,
-                  fontWeight: 800,
-                  letterSpacing: "0.06em",
-                  textTransform: "uppercase",
-                  color: MUTED,
-                  mb: 1,
-                }}
-              >
-                Top schools
-              </Typography>
-
-              {topSchools.length === 0 ? (
-                <Typography sx={{ fontSize: 13.5, color: MUTED }}>
-                  Schools will appear here after the first downloads.
-                </Typography>
-              ) : (
-                topSchools.map((loc, index) => (
-                  <Box
-                    key={loc.place_id}
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 1.25,
-                      py: 0.9,
-                      borderTop: index === 0 ? 0 : `1px solid ${BORDER}`,
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        width: 18,
-                        fontWeight: 800,
-                        fontSize: 13,
-                        color: BRAND,
-                      }}
-                    >
-                      {index + 1}
-                    </Typography>
-
-                    <Typography
-                      sx={{
-                        flex: 1,
-                        minWidth: 0,
-                        fontSize: 13.5,
-                        fontWeight: 650,
-                        color: TEXT,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {loc.school_name}
-                    </Typography>
-
-                    <Typography
-                      sx={{ fontSize: 13, fontWeight: 800, color: MUTED }}
-                    >
-                      {loc.downloads}
-                    </Typography>
-                  </Box>
-                ))
-              )}
-            </Box>
-          </Box>
+          <CommunityInsights
+            locations={locations}
+            totalDownloads={totalDownloads}
+            onFocus={focusSchool}
+          />
         </Box>
       </Box>
     </Box>
@@ -4170,6 +4788,355 @@ function DownloadSection() {
 }
 
 /* =========================================================
+   DONATE (PayMongo hosted checkout)
+   ========================================================= */
+
+const swalDark = {
+  background: "#142653",
+  color: "#fff",
+  confirmButtonColor: BRAND,
+};
+
+function DonateSection() {
+  const [selected, setSelected] = useState(100); // a preset amount or "custom"
+  const [custom, setCustom] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const amount =
+    selected === "custom" ? Math.floor(Number(custom)) || 0 : selected;
+  const valid = amount >= DONATE_MIN && amount <= DONATE_MAX;
+
+  // PayMongo sends the donor back with ?donation=success|cancelled.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("donation");
+
+    if (!status) return;
+
+    params.delete("donation");
+    const query = params.toString();
+
+    window.history.replaceState(
+      {},
+      "",
+      window.location.pathname +
+        (query ? `?${query}` : "") +
+        window.location.hash
+    );
+
+    if (status === "success") {
+      Swal.fire({
+        ...swalDark,
+        icon: "success",
+        title: "Thank you for your support!",
+        text: "Your donation helps keep Gregg Dictionary free for every learner.",
+        confirmButtonText: "You're welcome",
+      });
+    } else if (status === "cancelled") {
+      Swal.fire({
+        ...swalDark,
+        icon: "info",
+        title: "Donation cancelled",
+        text: "No worries — you weren't charged.",
+        confirmButtonText: "Okay",
+      });
+    }
+  }, []);
+
+  const startDonation = async () => {
+    if (busy) return;
+
+    if (!valid) {
+      Swal.fire({
+        ...swalDark,
+        icon: "warning",
+        title: "Check the amount",
+        text: `Please enter an amount from ₱${DONATE_MIN} to ₱${DONATE_MAX.toLocaleString()}.`,
+        confirmButtonText: "Okay",
+      });
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const response = await fetch(DONATE_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (response.ok && data.checkout_url) {
+        // Off to PayMongo — the donor scans the QR Ph code there.
+        window.location.assign(data.checkout_url);
+        return;
+      }
+
+      throw new Error(data.error || "Couldn't start the checkout");
+    } catch (error) {
+      console.error("[Gregg] Donation checkout failed:", error);
+
+      // Fallback: a static PayMongo Payment Link (donor enters the amount there).
+      if (PAYMONGO_LINK) {
+        window.location.assign(PAYMONGO_LINK);
+        return;
+      }
+
+      Swal.fire({
+        ...swalDark,
+        icon: "error",
+        title: "Donations aren't available right now",
+        text: "We couldn't open the payment page. Please try again in a moment.",
+        confirmButtonText: "Okay",
+      });
+    }
+
+    setBusy(false);
+  };
+
+  return (
+    <Box
+      id="donate"
+      sx={{
+        scrollMarginTop: 100,
+        pb: { xs: 8, md: 10 },
+      }}
+    >
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 1180,
+          mx: "auto",
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", md: "1fr 420px" },
+          gap: { xs: 3, md: 6 },
+          alignItems: "center",
+          bgcolor: "#fff",
+          border: `1px solid ${BORDER}`,
+          borderRadius: { xs: "24px", md: "32px" },
+          boxShadow: "0 18px 45px rgba(36,79,196,.08)",
+          px: { xs: 2.5, sm: 4, md: 6 },
+          py: { xs: 3.5, md: 5 },
+        }}
+      >
+        {/* ---------- Pitch ---------- */}
+        <Box>
+          <Chip
+            icon={<FavoriteRoundedIcon sx={{ fontSize: 17 }} />}
+            label="Support the project"
+            sx={{
+              bgcolor: BRAND_LIGHT,
+              color: BRAND,
+              fontWeight: 800,
+              "& .MuiChip-icon": { color: "#E5484D" },
+              mb: 2,
+            }}
+          />
+
+          <Typography
+            component="h2"
+            sx={{
+              fontWeight: 900,
+              letterSpacing: "-0.035em",
+              fontSize: { xs: 28, sm: 34, md: 40 },
+              lineHeight: 1.15,
+              color: TEXT,
+              mb: 1.5,
+            }}
+          >
+            Keep Gregg Dictionary
+            <Box component="span" sx={{ color: BRAND, ml: 1 }}>
+              free for everyone.
+            </Box>
+          </Typography>
+
+          <Typography
+            sx={{
+              color: MUTED,
+              maxWidth: 520,
+              fontSize: { xs: 15, md: 16.5 },
+              lineHeight: 1.7,
+              mb: 2.5,
+            }}
+          >
+            The app is free for every learner. If it helped your shorthand
+            practice, a small donation helps keep it online and growing —
+            every peso counts.
+          </Typography>
+
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+            {["Free for all learners", "Secure PayMongo checkout", "Pay with QR Ph"].map(
+              (item) => (
+                <Box
+                  key={item}
+                  sx={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 0.6,
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    color: TEXT,
+                    bgcolor: PAGE_BG,
+                    border: `1px solid ${BORDER}`,
+                    borderRadius: "999px",
+                    px: 1.4,
+                    py: 0.55,
+                  }}
+                >
+                  <CheckCircleRoundedIcon sx={{ fontSize: 15, color: BRAND }} />
+                  {item}
+                </Box>
+              )
+            )}
+          </Box>
+        </Box>
+
+        {/* ---------- Amount picker ---------- */}
+        <Box
+          sx={{
+            borderRadius: "24px",
+            bgcolor: PAGE_BG,
+            border: `1px solid ${BORDER}`,
+            p: { xs: 2, sm: 2.5 },
+          }}
+        >
+          <Typography
+            sx={{
+              fontSize: 11.5,
+              fontWeight: 800,
+              letterSpacing: "0.07em",
+              textTransform: "uppercase",
+              color: MUTED,
+              mb: 1.25,
+            }}
+          >
+            Choose an amount
+          </Typography>
+
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, 1fr)",
+              gap: 1,
+            }}
+          >
+            {[...DONATE_AMOUNTS, "custom"].map((option) => {
+              const active = selected === option;
+
+              return (
+                <Box
+                  key={option}
+                  component="button"
+                  type="button"
+                  onClick={() => setSelected(option)}
+                  aria-pressed={active}
+                  sx={{
+                    all: "unset",
+                    boxSizing: "border-box",
+                    cursor: "pointer",
+                    textAlign: "center",
+                    gridColumn: option === "custom" ? "1 / 3" : "auto",
+                    py: 1.3,
+                    borderRadius: "14px",
+                    fontSize: 15.5,
+                    fontWeight: 850,
+                    bgcolor: active ? BRAND_LIGHT : "#fff",
+                    color: active ? BRAND : TEXT,
+                    border: `2px solid ${active ? BRAND : BORDER}`,
+                    transition: "all .15s ease",
+                    "&:hover": { borderColor: BRAND },
+                    "&:focus-visible": { outline: `2px solid ${BRAND_DEEP}` },
+                  }}
+                >
+                  {option === "custom"
+                    ? "Other amount"
+                    : `₱${option.toLocaleString()}`}
+                </Box>
+              );
+            })}
+          </Box>
+
+          {selected === "custom" && (
+            <TextField
+              autoFocus
+              fullWidth
+              type="number"
+              value={custom}
+              onChange={(event) => setCustom(event.target.value)}
+              placeholder={`${DONATE_MIN} – ${DONATE_MAX.toLocaleString()}`}
+              inputProps={{ min: DONATE_MIN, max: DONATE_MAX, step: 1 }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Typography sx={{ fontWeight: 800, color: TEXT }}>
+                      ₱
+                    </Typography>
+                  </InputAdornment>
+                ),
+                sx: { borderRadius: "14px", bgcolor: "#fff", fontWeight: 700 },
+              }}
+              sx={{ mt: 1.25 }}
+            />
+          )}
+
+          <Button
+            fullWidth
+            variant="contained"
+            disableElevation
+            disabled={busy || !valid}
+            onClick={startDonation}
+            startIcon={
+              busy ? (
+                <CircularProgress size={18} sx={{ color: "inherit" }} />
+              ) : (
+                <FavoriteRoundedIcon />
+              )
+            }
+            sx={{
+              mt: 1.75,
+              py: 1.35,
+              borderRadius: "14px",
+              bgcolor: BRAND,
+              textTransform: "none",
+              fontWeight: 800,
+              fontSize: 15.5,
+              "&:hover": { bgcolor: BRAND_DARK },
+              "&.Mui-disabled": {
+                bgcolor: "rgba(56,105,232,.45)",
+                color: "rgba(255,255,255,.85)",
+              },
+            }}
+          >
+            {busy
+              ? "Opening PayMongo…"
+              : valid
+              ? `Donate ₱${amount.toLocaleString()}`
+              : "Enter an amount"}
+          </Button>
+
+          <Box
+            sx={{
+              mt: 1.5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 0.6,
+              color: MUTED,
+              fontSize: 12,
+            }}
+          >
+            <LockRoundedIcon sx={{ fontSize: 14 }} />
+            Secure checkout by PayMongo — scan the QR Ph code with any bank or e-wallet app.
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+/* =========================================================
    FOOTER
    ========================================================= */
 
@@ -4331,6 +5298,12 @@ function Footer() {
               icon={<HelpOutlineRoundedIcon />}
               label="FAQ"
               onClick={() => scrollTo("faq")}
+            />
+
+            <FooterLink
+              icon={<FavoriteRoundedIcon />}
+              label="Donate"
+              onClick={() => scrollTo("donate")}
             />
           </FooterColumn>
 
