@@ -60,15 +60,39 @@ import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineR
  * ├── onboarding-browse.png
  * ├── onboarding-saved.png
  * └── app-preview.mp4
+ *
+ * The .apk itself is NOT required in /public. APP_DOWNLOAD_URL below
+ * can point either at a same-origin file in /public (e.g.
+ * "/Gregg%20Dictionary.apk") or at an external host such as a GitHub
+ * Releases asset — triggerDownload() (below) detects which one it is
+ * and downloads it the right way automatically.
  */
 
 const APP_ICON = "/icon.png";
 const APP_VIDEO = "/app-preview.mp4";
 
-// GitHub Release APK
+// Where the .apk is actually hosted. This can be either:
+//   - a same-origin path into /public, e.g. "/Gregg%20Dictionary.apk"
+//   - a full cross-origin URL, e.g. a GitHub Releases asset link
+// triggerDownload() below picks the right download strategy for
+// whichever one this is set to, so no other code needs to change if
+// you move the file later.
 const APP_DOWNLOAD_URL =
   "https://github.com/donme1518/Gregg-web/releases/download/v1.0.0/Gregg.Dictionary.apk";
-const APP_DOWNLOAD_FILENAME = "Gregg.Dictionary.apk";
+const APP_DOWNLOAD_FILENAME = "Gregg Dictionary.apk";
+
+// Same-origin URLs (local /public files) can be fetched and streamed
+// with real byte progress + a custom filename. Cross-origin URLs
+// (like GitHub Releases) can't — fetch() is blocked by CORS before
+// it can read any bytes — so those fall back to a plain navigation
+// download instead, which browsers allow regardless of CORS.
+function isSameOriginDownloadUrl(url) {
+  try {
+    return new URL(url, window.location.origin).origin === window.location.origin;
+  } catch (error) {
+    return false;
+  }
+}
 
 // Free, no-signup hit counter (https://countapi.mileshilliard.com) used
 // to track and display real download counts across all visitors without
@@ -198,6 +222,97 @@ function DownloadProvider({ children }) {
     };
   }, []);
 
+  // Same-origin download: fetch + stream the response so we can show
+  // real byte-by-byte progress, then save it as a named Blob. This is
+  // the original approach, unchanged — it only works same-origin
+  // because reading response bytes with fetch() requires a CORS
+  // allow-origin header the server grants to its own page.
+  const downloadSameOrigin = async () => {
+    const response = await fetch(APP_DOWNLOAD_URL);
+
+    if (!response.ok || !response.body) {
+      throw new Error("Download request failed");
+    }
+
+    const contentLength = response.headers.get("Content-Length");
+    const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) break;
+
+      chunks.push(value);
+      received += value.length;
+
+      if (total) {
+        setProgress(Math.min(99, Math.round((received / total) * 100)));
+      } else {
+        // No Content-Length header to measure against — creep
+        // the bar forward so it still reads as "in progress".
+        setProgress((prev) => (prev < 90 ? prev + 3 : prev));
+      }
+    }
+
+    const blob = new Blob(chunks);
+    const blobUrl = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = APP_DOWNLOAD_FILENAME;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+
+    setProgress(100);
+  };
+
+  // Cross-origin download (e.g. a GitHub Releases asset): fetch()
+  // can't read the response bytes here — the browser blocks it with
+  // a CORS error before any data arrives, since GitHub's asset host
+  // doesn't send an Access-Control-Allow-Origin header for arbitrary
+  // origins. A plain navigation click is NOT subject to CORS, and
+  // GitHub serves release assets with `Content-Disposition:
+  // attachment`, so the browser still shows a real "Save As"/download
+  // instead of navigating away. Two trade-offs vs. the same-origin
+  // path: the `download` attribute (custom filename) is ignored
+  // cross-origin, so the saved file keeps whatever name GitHub gave
+  // the asset, and real byte progress can't be measured, so we
+  // animate a short simulated progress bar purely for UI feedback.
+  const downloadCrossOrigin = async () => {
+    await new Promise((resolve) => {
+      let simulated = 0;
+
+      const interval = setInterval(() => {
+        simulated = Math.min(92, simulated + Math.random() * 18 + 7);
+        setProgress(Math.round(simulated));
+
+        if (simulated >= 92) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 140);
+    });
+
+    const link = document.createElement("a");
+    link.href = APP_DOWNLOAD_URL;
+    // Harmless to set even though cross-origin browsers ignore it.
+    link.download = APP_DOWNLOAD_FILENAME;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setProgress(100);
+  };
+
   const triggerDownload = async () => {
     if (isDownloading) return;
 
@@ -205,54 +320,11 @@ function DownloadProvider({ children }) {
     setProgress(0);
 
     try {
-      const response = await fetch(APP_DOWNLOAD_URL);
-
-      if (!response.ok || !response.body) {
-        throw new Error("Download request failed");
+      if (isSameOriginDownloadUrl(APP_DOWNLOAD_URL)) {
+        await downloadSameOrigin();
+      } else {
+        await downloadCrossOrigin();
       }
-
-      const contentLength = response.headers.get("Content-Length");
-      const total = contentLength
-        ? parseInt(contentLength, 10)
-        : 0;
-
-      const reader = response.body.getReader();
-      const chunks = [];
-      let received = 0;
-
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) break;
-
-        chunks.push(value);
-        received += value.length;
-
-        if (total) {
-          setProgress(
-            Math.min(99, Math.round((received / total) * 100))
-          );
-        } else {
-          // No Content-Length header to measure against — creep
-          // the bar forward so it still reads as "in progress".
-          setProgress((prev) => (prev < 90 ? prev + 3 : prev));
-        }
-      }
-
-      const blob = new Blob(chunks);
-      const blobUrl = URL.createObjectURL(blob);
-
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = APP_DOWNLOAD_FILENAME;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
-
-      setProgress(100);
 
       // Best-effort count increment — doesn't block success feedback.
       fetch(`${DOWNLOAD_COUNTER_API}/hit/${DOWNLOAD_COUNTER_KEY}`)
