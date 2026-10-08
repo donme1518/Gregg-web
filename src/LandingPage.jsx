@@ -101,7 +101,7 @@ const MIN_APK_BYTES = 1024 * 1024; // 1 MB
 // and would rather record downloads there instead.
 const DOWNLOAD_COUNTER_API = "https://countapi.mileshilliard.com/api/v1";
 // Bumping the key (v1 -> v2) starts the public counter again from zero.
-const DOWNLOAD_COUNTER_KEY = "gregg-shorthand-dictionary-apk-downloads-v2";
+const DOWNLOAD_COUNTER_KEY = "gregg-shorthand-dictionary-apk-downloads-v3";
 
 /* ---- Where do learners come from? (OpenStreetMap + Supabase) ----
  * 100% free, no credit card needed:
@@ -4946,9 +4946,9 @@ function DonateSection() {
               mb: 1.5,
             }}
           >
-            Keep Gregg Dictionary
+            Support
             <Box component="span" sx={{ color: BRAND, ml: 1 }}>
-              free for everyone.
+              the developers.
             </Box>
           </Typography>
 
@@ -4961,13 +4961,11 @@ function DonateSection() {
               mb: 2.5,
             }}
           >
-            The app is free for every learner. If it helped your shorthand
-            practice, a small donation helps keep it online and growing —
-            every peso counts.
+            Help us continue improving Gregg Dictionary. Your support helps the developers maintain the app, add new features, fix issues, and keep the dictionary updated for learners and shorthand enthusiasts. Every contribution, big or small, is greatly appreciated.
           </Typography>
 
           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-            {["Free for all learners", "Secure PayMongo checkout", "Pay with QR Ph"].map(
+            {["Secure PayMongo checkout", "Donate with QR Ph"].map(
               (item) => (
                 <Box
                   key={item}
