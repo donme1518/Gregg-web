@@ -75,8 +75,19 @@ const APP_VIDEO = "/app-preview.mp4";
 // The .apk lives in /public as "Gregg Dictionary.apk" — spaces are
 // URL-encoded in the href, but the visitor's downloaded file keeps
 // the readable name via the `download` attribute.
-const APP_DOWNLOAD_URL = "/Gregg%20Dictionary.apk";
+//
+// IMPORTANT (Vercel): a real APK is tens of MB. If your deployed download is
+// only ~134 bytes, the file in Git is a Git LFS *pointer* (or was never
+// committed), not the real APK. Either enable Git LFS on Vercel, or host the
+// APK somewhere else (Supabase Storage public bucket, Cloudflare R2, ...) and
+// set VITE_APK_URL to its public URL — no code change needed.
+const APP_DOWNLOAD_URL =
+  import.meta.env?.VITE_APK_URL || "/Gregg%20Dictionary.apk";
 const APP_DOWNLOAD_FILENAME = "Gregg Dictionary.apk";
+
+// Anything smaller than this is certainly not the real APK (Git LFS pointer
+// files are ~130 bytes, an SPA fallback page is a few KB).
+const MIN_APK_BYTES = 1024 * 1024; // 1 MB
 
 // Free, no-signup hit counter (https://countapi.mileshilliard.com) used
 // to track and display real download counts across all visitors without
@@ -1142,6 +1153,18 @@ function DownloadProvider({ children }) {
     };
   }, []);
 
+  // Plain browser download — used when the file lives on another domain that
+  // doesn't allow fetch() (CORS). No progress bar, but it always works.
+  const directDownload = () => {
+    const link = document.createElement("a");
+    link.href = APP_DOWNLOAD_URL;
+    link.download = APP_DOWNLOAD_FILENAME;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const startDownload = async (place) => {
     if (isDownloading) return;
 
@@ -1149,52 +1172,90 @@ function DownloadProvider({ children }) {
     setProgress(0);
 
     try {
-      const response = await fetch(APP_DOWNLOAD_URL);
+      let usedDirectLink = false;
+      let response;
 
-      if (!response.ok || !response.body) {
-        throw new Error("Download request failed");
+      try {
+        response = await fetch(APP_DOWNLOAD_URL, { cache: "no-store" });
+      } catch (networkError) {
+        // Almost always CORS on a cross-origin host. Fall back to a normal
+        // link download (the browser follows redirects & CORS-free).
+        response = null;
       }
 
-      const contentLength = response.headers.get("Content-Length");
-      const total = contentLength
-        ? parseInt(contentLength, 10)
-        : 0;
-
-      const reader = response.body.getReader();
-      const chunks = [];
-      let received = 0;
-
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) break;
-
-        chunks.push(value);
-        received += value.length;
-
-        if (total) {
-          setProgress(
-            Math.min(99, Math.round((received / total) * 100))
-          );
-        } else {
-          // No Content-Length header to measure against — creep
-          // the bar forward so it still reads as "in progress".
-          setProgress((prev) => (prev < 90 ? prev + 3 : prev));
+      if (response) {
+        if (!response.ok || !response.body) {
+          throw new Error("Download request failed");
         }
+
+        // A hosting rewrite can answer with index.html instead of the file.
+        const contentType = (
+          response.headers.get("Content-Type") || ""
+        ).toLowerCase();
+
+        if (contentType.includes("text/html")) {
+          throw new Error("Download URL returned a web page, not the APK");
+        }
+
+        const contentLength = response.headers.get("Content-Length");
+        const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+        // Fail early on a Git LFS pointer / tiny placeholder file.
+        if (total && total < MIN_APK_BYTES) {
+          throw new Error(
+            `APK is only ${total} bytes — the real file was not deployed`
+          );
+        }
+
+        const reader = response.body.getReader();
+        const chunks = [];
+        let received = 0;
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) break;
+
+          chunks.push(value);
+          received += value.length;
+
+          if (total) {
+            setProgress(
+              Math.min(99, Math.round((received / total) * 100))
+            );
+          } else {
+            // No Content-Length header to measure against — creep
+            // the bar forward so it still reads as "in progress".
+            setProgress((prev) => (prev < 90 ? prev + 3 : prev));
+          }
+        }
+
+        // Double-check what actually arrived (covers servers that send no
+        // Content-Length, e.g. compressed or chunked responses).
+        if (received < MIN_APK_BYTES) {
+          throw new Error(
+            `APK is only ${received} bytes — the real file was not deployed`
+          );
+        }
+
+        const blob = new Blob(chunks, {
+          type: "application/vnd.android.package-archive",
+        });
+        const blobUrl = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = blobUrl;
+        link.download = APP_DOWNLOAD_FILENAME;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+      } else {
+        usedDirectLink = true;
+        directDownload();
       }
-
-      const blob = new Blob(chunks);
-      const blobUrl = URL.createObjectURL(blob);
-
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = APP_DOWNLOAD_FILENAME;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
 
       setProgress(100);
 
@@ -1205,7 +1266,9 @@ function DownloadProvider({ children }) {
           .then((saved) => {
             if (saved) addLocalLocation(place);
           })
-          .catch(() => {});
+          .catch((error) => {
+            console.warn("[Gregg] Saving the download location failed:", error);
+          });
       }
 
       // Best-effort count increment — doesn't block success feedback.
@@ -1223,12 +1286,15 @@ function DownloadProvider({ children }) {
         color: "#fff",
         confirmButtonColor: BRAND,
         icon: "success",
-        title: "Download complete!",
-        html:
-          '<span style="color:#22C55E; font-weight:800;">Gregg Dictionary</span> was downloaded successfully',
+        title: usedDirectLink ? "Download started!" : "Download complete!",
+        html: usedDirectLink
+          ? '<span style="color:#22C55E; font-weight:800;">Gregg Dictionary</span> is downloading — check your browser\'s downloads'
+          : '<span style="color:#22C55E; font-weight:800;">Gregg Dictionary</span> was downloaded successfully',
         confirmButtonText: "Great",
       });
     } catch (error) {
+      console.error("[Gregg] APK download failed:", error);
+
       Swal.fire({
         background: "#142653",
         color: "#fff",
