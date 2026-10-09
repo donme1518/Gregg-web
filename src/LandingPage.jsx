@@ -48,8 +48,12 @@ import EmailRoundedIcon from "@mui/icons-material/EmailRounded";
 import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
 import PlaceRoundedIcon from "@mui/icons-material/PlaceRounded";
 import FavoriteRoundedIcon from "@mui/icons-material/FavoriteRounded";
+import LayersRoundedIcon from "@mui/icons-material/LayersRounded";
+import OpenInNewRoundedIcon from "@mui/icons-material/OpenInNewRounded";
+import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import EmojiEventsRoundedIcon from "@mui/icons-material/EmojiEventsRounded";
+import KeyboardArrowUpRoundedIcon from "@mui/icons-material/KeyboardArrowUpRounded";
 
 /*
  * Gregg Dictionary Landing Page
@@ -274,6 +278,92 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
+/* ---- MapLibre GL (vector maps) ----
+ * The crisp, modern map styles come from OpenFreeMap as vector tiles, drawn
+ * by MapLibre GL and plugged into Leaflet. Loaded lazily; if it can't load
+ * (offline CDN, no WebGL) every vector style quietly falls back to a raster
+ * style, so the map never ends up blank.
+ */
+const MAPLIBRE_VERSION = "3.3.1";
+const MAPLIBRE_LEAFLET_VERSION = "0.0.20";
+let maplibrePromise = null;
+
+function addMapStylesheet(id, href) {
+  if (document.getElementById(id)) return;
+
+  const link = document.createElement("link");
+  link.id = id;
+  link.rel = "stylesheet";
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+function addMapScript(id, src) {
+  return new Promise((resolve, reject) => {
+    if (document.getElementById(id)) {
+      resolve();
+      return;
+    }
+
+    const el = document.createElement("script");
+    el.id = id;
+    el.src = src;
+    el.async = true;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error(`${id}-failed`));
+    document.head.appendChild(el);
+  });
+}
+
+// Resolves true when vector maps are available, false otherwise. Never rejects.
+function loadMapLibre() {
+  if (typeof window.L?.maplibreGL === "function") return Promise.resolve(true);
+  if (maplibrePromise) return maplibrePromise;
+
+  maplibrePromise = (async () => {
+    try {
+      addMapStylesheet(
+        "maplibre-css",
+        `https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.css`
+      );
+
+      // Order matters: the Leaflet binding needs MapLibre to exist first.
+      await addMapScript(
+        "maplibre-js",
+        `https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.js`
+      );
+      await addMapScript(
+        "maplibre-leaflet-js",
+        `https://unpkg.com/@maplibre/maplibre-gl-leaflet@${MAPLIBRE_LEAFLET_VERSION}/leaflet-maplibre-gl.js`
+      );
+
+      return typeof window.L?.maplibreGL === "function";
+    } catch {
+      maplibrePromise = null; // allow a retry on the next visit
+      return false;
+    }
+  })();
+
+  return maplibrePromise;
+}
+
+let webglSupported;
+
+function supportsWebGL() {
+  if (webglSupported !== undefined) return webglSupported;
+
+  try {
+    const canvas = document.createElement("canvas");
+    webglSupported = Boolean(
+      canvas.getContext("webgl2") || canvas.getContext("webgl")
+    );
+  } catch {
+    webglSupported = false;
+  }
+
+  return webglSupported;
+}
+
 // Only places OpenStreetMap tags as a school, college or university.
 const SCHOOL_OSM_TAGS = [
   "amenity:university",
@@ -447,9 +537,191 @@ async function saveDownloadLocation(place) {
    Tap/click the map to drop a pin on the school; drag to adjust.
    ========================================================= */
 
+/* ---- Map styles ----
+ * No API keys anywhere. (CARTO, used before, started stamping "API KEY
+ * REQUIRED" on every tile in Aug 2026.)
+ *
+ *   Colorful / Clean  OpenFreeMap vector tiles (sharp at every zoom level).
+ *   Dark / Satellite  Esri raster tiles, with a transparent layer on top
+ *                     for the place names.
+ *
+ * "hidden" styles don't appear in the layers menu: they are the raster
+ * fallbacks used when a vector style can't load, and the street map used in
+ * the school picker. Change DEFAULT_MAP_STYLE to pick what visitors see
+ * first. Attribution is required by every provider and is shown on the map.
+ */
+const OPENFREEMAP = "https://tiles.openfreemap.org";
+const OPENFREEMAP_CREDIT =
+  '<a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener noreferrer">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>';
+
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
+const ESRI_CANVAS_CREDIT = "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ";
+const ESRI_STREET_CREDIT =
+  "Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012";
+const ESRI_IMAGERY_CREDIT =
+  "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community";
+
+const DEFAULT_MAP_STYLE = "liberty";
+const MAP_STYLE_STORAGE_KEY = "gregg:map-style";
+
+const MAP_STYLES = {
+  liberty: {
+    label: "Colorful",
+    swatch: "linear-gradient(135deg, #cfe6c3, #a9d3ef)",
+    vector: `${OPENFREEMAP}/styles/liberty`,
+    fallback: "streets",
+  },
+  positron: {
+    label: "Clean",
+    swatch: "linear-gradient(135deg, #f4f6fa, #d9e1ee)",
+    vector: `${OPENFREEMAP}/styles/positron`,
+    fallback: "light",
+  },
+  dark: {
+    label: "Dark",
+    swatch: "linear-gradient(135deg, #3a4150, #14171d)",
+    layers: [
+      {
+        url: `${ESRI}/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
+        maxNativeZoom: 16,
+        attribution: ESRI_CANVAS_CREDIT,
+      },
+      {
+        url: `${ESRI}/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`,
+        maxNativeZoom: 16,
+      },
+    ],
+  },
+  satellite: {
+    label: "Satellite",
+    swatch: "linear-gradient(135deg, #3c6b43, #1d4f7a)",
+    layers: [
+      {
+        url: `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
+        maxNativeZoom: 18,
+        attribution: ESRI_IMAGERY_CREDIT,
+      },
+      {
+        url: `${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`,
+        maxNativeZoom: 17,
+      },
+    ],
+  },
+
+  // ---- hidden: fallbacks + the school picker's street map ----
+  light: {
+    label: "Clean (basic)",
+    hidden: true,
+    layers: [
+      {
+        url: `${ESRI}/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}`,
+        maxNativeZoom: 16,
+        attribution: ESRI_CANVAS_CREDIT,
+      },
+      {
+        url: `${ESRI}/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}`,
+        maxNativeZoom: 16,
+      },
+    ],
+  },
+  streets: {
+    label: "Streets",
+    hidden: true,
+    layers: [
+      {
+        url: `${ESRI}/World_Street_Map/MapServer/tile/{z}/{y}/{x}`,
+        maxNativeZoom: 19,
+        attribution: ESRI_STREET_CREDIT,
+      },
+    ],
+  },
+};
+
+// Builds the Leaflet layer for a style: a vector layer when it is available
+// (MapLibre loaded + WebGL), otherwise raster tiles.
+function createTileLayer(L, key) {
+  const style = MAP_STYLES[key] ?? MAP_STYLES[DEFAULT_MAP_STYLE];
+
+  if (style.vector) {
+    if (typeof L.maplibreGL === "function" && supportsWebGL()) {
+      return L.maplibreGL({
+        style: style.vector,
+        attribution: OPENFREEMAP_CREDIT,
+      });
+    }
+
+    return createTileLayer(L, style.fallback);
+  }
+
+  return L.layerGroup(
+    style.layers.map((layer, index) =>
+      L.tileLayer(layer.url, {
+        maxZoom: 19,
+        maxNativeZoom: layer.maxNativeZoom,
+        attribution: layer.attribution ?? "",
+        zIndex: index + 1, // labels always sit above the base map
+      })
+    )
+  );
+}
+
+// Adds a style to the map and remembers it in tileRef. If a vector style
+// fails to load (network, WebGL), its raster fallback is swapped in so the
+// map never stays blank.
+function addBaseLayer(L, map, key, tileRef) {
+  const layer = createTileLayer(L, key).addTo(map);
+  tileRef.current = { key, layer };
+
+  const glMap = layer.getMaplibreMap?.();
+
+  if (glMap) {
+    let loaded = false;
+
+    glMap.once("load", () => {
+      loaded = true;
+    });
+
+    glMap.on("error", () => {
+      if (loaded || tileRef.current?.layer !== layer) return;
+
+      const fallbackKey = MAP_STYLES[key]?.fallback ?? "streets";
+
+      map.removeLayer(layer);
+      tileRef.current = {
+        key,
+        layer: createTileLayer(L, fallbackKey).addTo(map),
+      };
+    });
+  }
+}
+
+function readSavedMapStyle() {
+  try {
+    const saved = localStorage.getItem(MAP_STYLE_STORAGE_KEY);
+    return MAP_STYLES[saved] && !MAP_STYLES[saved].hidden ? saved : DEFAULT_MAP_STYLE;
+  } catch {
+    return DEFAULT_MAP_STYLE;
+  }
+}
+
 const PH_VIEW = [
   [PH_BOUNDS.south + 0.2, PH_BOUNDS.west + 0.5],
   [PH_BOUNDS.north - 0.3, PH_BOUNDS.east - 0.2],
+];
+
+/* ---- Framing the learners map on the Philippines ----
+ * The map opens zoomed to PH_FIT_BOUNDS and can't be zoomed out past that or
+ * dragged away from it, but the surrounding region (Taiwan, Borneo, the
+ * South China Sea, Brunei, ...) stays visible in the frame instead of being
+ * painted over — only the pins themselves are Philippines-specific.
+ */
+const PH_FIT_BOUNDS = [
+  [4.2, 116.6],
+  [21.6, 127.1],
+];
+const PH_MAX_BOUNDS = [
+  [3.8, 116.2],
+  [21.9, 127.5],
 ];
 
 function ManualPinMap({ pin, onPin, onError }) {
@@ -484,11 +756,7 @@ function ManualPinMap({ pin, onPin, onError }) {
           maxBoundsViscosity: 0.8,
         });
 
-        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          maxZoom: 19,
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>',
-        }).addTo(map);
+        createTileLayer(L, "streets").addTo(map);
 
         map.fitBounds(PH_VIEW);
 
@@ -1531,6 +1799,57 @@ function DownloadCounter() {
   );
 }
 
+/* =========================================================
+   SCROLL TO TOP
+   ========================================================= */
+
+function ScrollToTopButton() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setVisible(window.scrollY > 480);
+
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  return (
+    <IconButton
+      onClick={() =>
+        window.scrollTo({ top: 0, behavior: "smooth" })
+      }
+      aria-label="Scroll to top"
+      sx={{
+        position: "fixed",
+        right: { xs: 16, sm: 24 },
+        bottom: { xs: 16, sm: 24 },
+        zIndex: 1300,
+
+        width: 46,
+        height: 46,
+
+        bgcolor: BRAND,
+        color: "#fff",
+
+        boxShadow: "0 10px 26px rgba(56,105,232,.35)",
+
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateY(0)" : "translateY(12px)",
+        pointerEvents: visible ? "auto" : "none",
+        transition: "opacity .2s ease, transform .2s ease, background-color .2s ease",
+
+        "&:hover": {
+          bgcolor: BRAND_DARK,
+        },
+      }}
+    >
+      <KeyboardArrowUpRoundedIcon />
+    </IconButton>
+  );
+}
+
 export default function LandingPage() {
   return (
     <DownloadProvider>
@@ -1558,6 +1877,8 @@ export default function LandingPage() {
         </main>
 
         <Footer />
+
+        <ScrollToTopButton />
       </Box>
     </DownloadProvider>
   );
@@ -3601,38 +3922,8 @@ function buildMarkerIcon(L, count) {
       className: "gregg-school-pin",
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
-      popupAnchor: [0, -size / 2],
     }),
   };
-}
-
-function buildInfoContent(loc) {
-  const wrap = document.createElement("div");
-  wrap.style.maxWidth = "220px";
-  wrap.style.color = TEXT;
-
-  // textContent (not innerHTML) — school names are user-submitted data.
-  const name = document.createElement("div");
-  name.style.fontWeight = "800";
-  name.textContent = loc.school_name;
-
-  const address = document.createElement("div");
-  address.style.fontSize = "12px";
-  address.style.color = MUTED;
-  address.textContent = loc.address || "";
-
-  const count = document.createElement("div");
-  count.style.marginTop = "4px";
-  count.style.fontSize = "12.5px";
-  count.style.fontWeight = "700";
-  count.style.color = BRAND;
-  count.textContent = `${loc.downloads} download${
-    loc.downloads === 1 ? "" : "s"
-  }`;
-
-  wrap.append(name, address, count);
-
-  return wrap;
 }
 
 /* ---- Island group (estimated from a pin's coordinates) ---- */
@@ -4190,6 +4481,238 @@ function CommunityInsights({ locations, totalDownloads, onFocus }) {
   );
 }
 
+/* ---- Modal shown when a school's pin is tapped ---- */
+
+function SchoolPinDialog({ loc, rank, schools, totalDownloads, onClose }) {
+  // Keep the last school around so the content doesn't vanish mid fade-out.
+  const lastRef = useRef(null);
+  if (loc) lastRef.current = loc;
+  const shown = loc || lastRef.current;
+
+  const share = shown && totalDownloads
+    ? Math.round((shown.downloads / totalDownloads) * 100)
+    : 0;
+
+  const mapsUrl = shown
+    ? `https://www.openstreetmap.org/?mlat=${shown.lat}&mlon=${shown.lng}#map=16/${shown.lat}/${shown.lng}`
+    : "#";
+
+  // Small embedded preview of exactly this school's pin — OpenStreetMap's
+  // own embeddable export view, so no extra Leaflet instance has to be
+  // mounted/torn down every time the dialog opens and closes.
+  const mapEmbedUrl = shown
+    ? `https://www.openstreetmap.org/export/embed.html?bbox=${shown.lng - 0.012}%2C${shown.lat - 0.009}%2C${shown.lng + 0.012}%2C${shown.lat + 0.009}&layer=mapnik&marker=${shown.lat}%2C${shown.lng}`
+    : "";
+
+  return (
+    <Dialog
+      open={Boolean(loc)}
+      onClose={onClose}
+      aria-labelledby="school-pin-title"
+      PaperProps={{
+        sx: {
+          width: "100%",
+          maxWidth: 380,
+          m: 2,
+          borderRadius: "24px",
+          overflow: "hidden",
+        },
+      }}
+    >
+      {shown && (
+        <>
+          <Box
+            sx={{
+              position: "relative",
+              color: "#fff",
+              px: 2.5,
+              pt: 2.5,
+              pb: 2.25,
+              background: `linear-gradient(135deg, ${BRAND_DEEP} 0%, ${BRAND} 100%)`,
+            }}
+          >
+            <IconButton
+              aria-label="Close"
+              onClick={onClose}
+              size="small"
+              sx={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                color: "#fff",
+                bgcolor: "rgba(255,255,255,.16)",
+                "&:hover": { bgcolor: "rgba(255,255,255,.26)" },
+              }}
+            >
+              <CloseRoundedIcon fontSize="small" />
+            </IconButton>
+
+            <Box
+              sx={{
+                width: 46,
+                height: 46,
+                borderRadius: "14px",
+                bgcolor: "rgba(255,255,255,.16)",
+                display: "grid",
+                placeItems: "center",
+                mb: 1.5,
+              }}
+            >
+              <SchoolRoundedIcon />
+            </Box>
+
+            <Typography
+              id="school-pin-title"
+              component="h2"
+              sx={{
+                fontWeight: 900,
+                fontSize: 21,
+                lineHeight: 1.25,
+                letterSpacing: "-0.01em",
+                pr: 3,
+                wordBreak: "break-word",
+              }}
+            >
+              {shown.school_name}
+            </Typography>
+
+            <Chip
+              size="small"
+              label={getIslandGroup(shown.lat, shown.lng)}
+              sx={{
+                mt: 1.25,
+                height: 24,
+                fontWeight: 800,
+                color: "#fff",
+                bgcolor: "rgba(255,255,255,.18)",
+              }}
+            />
+          </Box>
+
+          <DialogContent sx={{ px: 2.5, pt: 2.25, pb: 1 }}>
+            {shown.address && (
+              <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1, mb: 2 }}>
+                <PlaceRoundedIcon sx={{ fontSize: 19, color: BRAND, mt: 0.15 }} />
+
+                <Typography sx={{ fontSize: 14, color: MUTED, lineHeight: 1.5 }}>
+                  {shown.address}
+                </Typography>
+              </Box>
+            )}
+
+            <Box
+              sx={{
+                mb: 2,
+                borderRadius: "14px",
+                overflow: "hidden",
+                border: `1px solid ${BORDER}`,
+                height: 160,
+                bgcolor: BRAND_LIGHT,
+              }}
+            >
+              <Box
+                component="iframe"
+                key={`${shown.lat},${shown.lng}`}
+                title={`Map location of ${shown.school_name}`}
+                src={mapEmbedUrl}
+                loading="lazy"
+                sx={{ width: "100%", height: "100%", border: 0, display: "block" }}
+              />
+            </Box>
+
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: 1,
+              }}
+            >
+              {[
+                {
+                  icon: <DownloadRoundedIcon sx={{ fontSize: 16 }} />,
+                  value: shown.downloads.toLocaleString(),
+                  label: shown.downloads === 1 ? "download" : "downloads",
+                },
+                {
+                  icon: <EmojiEventsRoundedIcon sx={{ fontSize: 16 }} />,
+                  value: rank ? `#${rank}` : "—",
+                  label: schools ? `of ${schools} school${schools === 1 ? "" : "s"}` : "rank",
+                },
+                {
+                  icon: <SchoolRoundedIcon sx={{ fontSize: 16 }} />,
+                  value: `${share}%`,
+                  label: "of all downloads",
+                },
+              ].map((stat) => (
+                <Box
+                  key={stat.label}
+                  sx={{
+                    borderRadius: "14px",
+                    bgcolor: BRAND_LIGHT,
+                    px: 1.1,
+                    py: 1.1,
+                    textAlign: "center",
+                  }}
+                >
+                  <Box sx={{ color: BRAND, display: "flex", justifyContent: "center" }}>
+                    {stat.icon}
+                  </Box>
+
+                  <Typography
+                    sx={{
+                      fontWeight: 900,
+                      fontSize: 19,
+                      color: TEXT,
+                      lineHeight: 1.2,
+                      mt: 0.25,
+                    }}
+                  >
+                    {stat.value}
+                  </Typography>
+
+                  <Typography sx={{ fontSize: 11, color: MUTED, lineHeight: 1.3 }}>
+                    {stat.label}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          </DialogContent>
+
+          <DialogActions sx={{ px: 2.5, pb: 2.25, pt: 1.5, gap: 1 }}>
+            <Button
+              component="a"
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              startIcon={<OpenInNewRoundedIcon />}
+              sx={{ textTransform: "none", fontWeight: 700, color: BRAND }}
+            >
+              Open in maps
+            </Button>
+
+            <Button
+              onClick={onClose}
+              variant="contained"
+              disableElevation
+              sx={{
+                ml: "auto",
+                textTransform: "none",
+                fontWeight: 800,
+                borderRadius: "12px",
+                px: 3,
+                bgcolor: BRAND,
+                "&:hover": { bgcolor: BRAND_DARK },
+              }}
+            >
+              Close
+            </Button>
+          </DialogActions>
+        </>
+      )}
+    </Dialog>
+  );
+}
+
 function LearnersMapSection() {
   const { locations } = useDownload();
 
@@ -4202,25 +4725,45 @@ function LearnersMapSection() {
   const [mapState, setMapState] = useState("loading"); // loading | ready | error
   const [mapHint, setMapHint] = useState(null);
 
+  // The school whose pin was tapped (shown in a modal).
+  const [selectedId, setSelectedId] = useState(null);
+
+  // Which tile style is showing, and the live Leaflet layer for it.
+  const [mapStyle, setMapStyle] = useState(readSavedMapStyle);
+  const [styleMenuOpen, setStyleMenuOpen] = useState(false);
+  const tileRef = useRef(null); // { key, layer }
+  const mapStyleRef = useRef(mapStyle);
+  mapStyleRef.current = mapStyle;
+
+  const chooseMapStyle = (key) => {
+    setMapStyle(key);
+    setStyleMenuOpen(false);
+
+    try {
+      localStorage.setItem(MAP_STYLE_STORAGE_KEY, key);
+    } catch {
+      // Not fatal — the choice just isn't remembered next visit.
+    }
+  };
+
   // Create the map once.
   useEffect(() => {
     let cancelled = false;
     let cleanupGestures = () => {};
 
-    loadLeaflet()
-      .then((L) => {
+    Promise.all([loadLeaflet(), loadMapLibre()])
+      .then(([L]) => {
         if (cancelled || !mapElRef.current) return;
 
         const isTouch = Boolean(L.Browser.mobile);
 
         const map = L.map(mapElRef.current, {
-          minZoom: 5,
+          // The real minimum zoom is set from the frame size (see
+          // fitPhilippines below) so the whole archipelago just fits.
+          minZoom: 4,
           maxZoom: 17,
-          maxBounds: [
-            [0, 108],
-            [27, 134],
-          ],
-          maxBoundsViscosity: 0.8,
+          maxBounds: PH_MAX_BOUNDS,
+          maxBoundsViscosity: 1,
 
           // Smooth, fractional zoom so pinching feels natural.
           zoomSnap: 0.25,
@@ -4240,16 +4783,26 @@ function LearnersMapSection() {
           attributionControl: true,
         });
 
-        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          maxZoom: 19,
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
-        }).addTo(map);
+        addBaseLayer(L, map, mapStyleRef.current, tileRef);
 
-        map.fitBounds([
-          [PH_BOUNDS.south + 0.2, PH_BOUNDS.west + 0.5],
-          [PH_BOUNDS.north - 0.3, PH_BOUNDS.east - 0.2],
-        ]);
+        // Frame the Philippines exactly, and never zoom out past that. Runs
+        // again whenever the frame changes size (rotation, window resize).
+        // The surrounding regions (Taiwan, Borneo, the South China Sea, ...)
+        // are left showing normally in the frame — nothing paints over them.
+        let userMoved = false;
+
+        const fitPhilippines = (force) => {
+          map.invalidateSize({ animate: false });
+
+          const fitZoom = map.getBoundsZoom(PH_FIT_BOUNDS, false);
+          map.setMinZoom(fitZoom);
+
+          if (force || !userMoved || map.getZoom() < fitZoom) {
+            map.fitBounds(PH_FIT_BOUNDS, { animate: false });
+          }
+        };
+
+        fitPhilippines(true);
 
         /* ---- gestures: trackpad pinch / Ctrl+wheel + touch hints ---- */
         const container = map.getContainer();
@@ -4286,6 +4839,7 @@ function LearnersMapSection() {
             { animate: false }
           );
 
+          userMoved = true;
           hideHint();
         };
 
@@ -4308,10 +4862,35 @@ function LearnersMapSection() {
           7000
         );
 
+        // Once the visitor touches the map, a later resize keeps their view
+        // (it only enforces the zoom-out limit instead of re-framing).
+        const markMoved = () => {
+          userMoved = true;
+        };
+
+        container.addEventListener("pointerdown", markMoved, {
+          capture: true,
+          passive: true,
+        });
+
+        let resizeTimer;
+        const resizeObserver =
+          typeof ResizeObserver === "function"
+            ? new ResizeObserver(() => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(() => fitPhilippines(false), 120);
+              })
+            : null;
+
+        resizeObserver?.observe(container);
+
         cleanupGestures = () => {
           clearTimeout(hintTimer);
+          clearTimeout(resizeTimer);
+          resizeObserver?.disconnect();
           container.removeEventListener("wheel", onWheel);
           container.removeEventListener("touchmove", onTouchMove);
+          container.removeEventListener("pointerdown", markMoved, true);
         };
 
         leafletRef.current = L;
@@ -4319,7 +4898,7 @@ function LearnersMapSection() {
         setMapState("ready");
 
         // The container may still be settling its size.
-        setTimeout(() => map.invalidateSize(), 150);
+        setTimeout(() => fitPhilippines(false), 150);
       })
       .catch(() => {
         if (!cancelled) setMapState("error");
@@ -4328,6 +4907,7 @@ function LearnersMapSection() {
     return () => {
       cancelled = true;
       cleanupGestures();
+      tileRef.current = null;
 
       if (mapRef.current) {
         mapRef.current.remove();
@@ -4338,7 +4918,22 @@ function LearnersMapSection() {
     };
   }, []);
 
-  // Fly to a school (used by the leaderboard) and open its popup.
+  // Swap the base map when the visitor picks another style.
+  useEffect(() => {
+    const map = mapRef.current;
+    const L = leafletRef.current;
+
+    if (mapState !== "ready" || !map || !L) return;
+    if (tileRef.current?.key === mapStyle) return;
+
+    const previous = tileRef.current?.layer;
+
+    addBaseLayer(L, map, mapStyle, tileRef);
+
+    if (previous) map.removeLayer(previous);
+  }, [mapStyle, mapState]);
+
+  // Fly to a school (used by the leaderboard) and open its details modal.
   const focusSchool = (loc) => {
     const map = mapRef.current;
 
@@ -4349,11 +4944,7 @@ function LearnersMapSection() {
       mapElRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
 
-    const entry = markersRef.current.get(loc.place_id);
-
-    if (entry) {
-      map.once("moveend", () => entry.marker.openPopup());
-    }
+    map.once("moveend", () => setSelectedId(loc.place_id));
 
     map.flyTo([loc.lat, loc.lng], Math.max(map.getZoom(), 12), {
       duration: 1.1,
@@ -4375,8 +4966,6 @@ function LearnersMapSection() {
       const existing = pins.get(loc.place_id);
 
       if (existing) {
-        existing.marker.setPopupContent(buildInfoContent(loc));
-
         if (existing.count !== loc.downloads) {
           existing.count = loc.downloads;
           existing.marker.setIcon(buildMarkerIcon(L, loc.downloads).icon);
@@ -4392,7 +4981,7 @@ function LearnersMapSection() {
         title: loc.school_name,
       })
         .addTo(map)
-        .bindPopup(buildInfoContent(loc));
+        .on("click", () => setSelectedId(loc.place_id));
 
       // Pop in new pins (but not the whole first batch on page load).
       if (firstSyncDoneRef.current && el.animate) {
@@ -4423,6 +5012,16 @@ function LearnersMapSection() {
     (sum, loc) => sum + loc.downloads,
     0
   );
+
+  const selectedLoc = selectedId
+    ? locations.find((loc) => loc.place_id === selectedId) ?? null
+    : null;
+
+  const selectedRank = selectedLoc
+    ? [...locations]
+        .sort((a, b) => b.downloads - a.downloads)
+        .findIndex((loc) => loc.place_id === selectedLoc.place_id) + 1
+    : 0;
 
   return (
     <Box
@@ -4496,7 +5095,38 @@ function LearnersMapSection() {
               isolation: "isolate",
             }}
           >
-            <Box ref={mapElRef} sx={{ position: "absolute", inset: 0 }} />
+            <Box
+              ref={mapElRef}
+              sx={{
+                position: "absolute",
+                inset: 0,
+
+                // Double-clicking +/- used to select the "+" text and paint it
+                // blue. Make the zoom buttons plain, unselectable white squares.
+                "& .leaflet-control-zoom a": {
+                  userSelect: "none",
+                  WebkitUserSelect: "none",
+                  WebkitTapHighlightColor: "transparent",
+                  backgroundColor: "#fff",
+                  color: "#333",
+                  outline: "none",
+                },
+                "& .leaflet-control-zoom a::selection": {
+                  background: "transparent",
+                },
+                "& .leaflet-control-zoom a:hover": {
+                  backgroundColor: "#f4f4f4",
+                },
+                "& .leaflet-control-zoom a:focus, & .leaflet-control-zoom a:active": {
+                  backgroundColor: "#fff",
+                  outline: "none",
+                },
+                "& .leaflet-control-zoom a.leaflet-disabled": {
+                  backgroundColor: "#f4f4f4",
+                  color: "#bbb",
+                },
+              }}
+            />
 
             {mapState === "ready" && mapHint && (
               <Box
@@ -4538,6 +5168,116 @@ function LearnersMapSection() {
               >
                 <CircularProgress size={28} sx={{ color: BRAND }} />
               </Box>
+            )}
+
+            {mapState === "ready" && (
+              <>
+                {/* click-away layer for the open menu */}
+                {styleMenuOpen && (
+                  <Box
+                    onClick={() => setStyleMenuOpen(false)}
+                    sx={{ position: "absolute", inset: 0, zIndex: 999 }}
+                  />
+                )}
+
+                <Box sx={{ position: "absolute", top: 12, right: 12, zIndex: 1000 }}>
+                  <Box
+                    component="button"
+                    type="button"
+                    aria-label="Change map style"
+                    aria-expanded={styleMenuOpen}
+                    onClick={() => setStyleMenuOpen((open) => !open)}
+                    sx={{
+                      all: "unset",
+                      boxSizing: "border-box",
+                      cursor: "pointer",
+                      width: 34,
+                      height: 34,
+                      display: "grid",
+                      placeItems: "center",
+                      bgcolor: "#fff",
+                      color: "#333",
+                      border: "2px solid rgba(0,0,0,.2)",
+                      borderRadius: "6px",
+                      "&:hover": { bgcolor: "#f4f4f4" },
+                      "&:focus-visible": { outline: `2px solid ${BRAND}` },
+                    }}
+                  >
+                    <LayersRoundedIcon sx={{ fontSize: 20 }} />
+                  </Box>
+
+                  {styleMenuOpen && (
+                    <Box
+                      role="menu"
+                      sx={{
+                        position: "absolute",
+                        top: 40,
+                        right: 0,
+                        minWidth: 156,
+                        p: 0.5,
+                        bgcolor: "#fff",
+                        borderRadius: "14px",
+                        border: `1px solid ${BORDER}`,
+                        boxShadow: "0 12px 30px rgba(30,49,87,.18)",
+                      }}
+                    >
+                      {Object.entries(MAP_STYLES)
+                        .filter(([, style]) => !style.hidden)
+                        .map(([key, style]) => {
+                        const active = key === mapStyle;
+
+                        return (
+                          <Box
+                            key={key}
+                            component="button"
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={active}
+                            onClick={() => chooseMapStyle(key)}
+                            sx={{
+                              all: "unset",
+                              boxSizing: "border-box",
+                              width: "100%",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 1.1,
+                              px: 1,
+                              py: 0.8,
+                              borderRadius: "10px",
+                              "&:hover, &:focus-visible": { bgcolor: BRAND_LIGHT },
+                            }}
+                          >
+                            <Box
+                              sx={{
+                                width: 20,
+                                height: 20,
+                                borderRadius: "6px",
+                                background: style.swatch,
+                                border: `1px solid ${BORDER}`,
+                                flexShrink: 0,
+                              }}
+                            />
+
+                            <Typography
+                              sx={{
+                                flex: 1,
+                                fontSize: 13.5,
+                                fontWeight: active ? 800 : 600,
+                                color: active ? BRAND : TEXT,
+                              }}
+                            >
+                              {style.label}
+                            </Typography>
+
+                            {active && <CheckRoundedIcon sx={{ fontSize: 17, color: BRAND }} />}
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  )}
+                </Box>
+              </>
             )}
 
             {mapState === "error" && (
@@ -4592,6 +5332,14 @@ function LearnersMapSection() {
           />
         </Box>
       </Box>
+
+      <SchoolPinDialog
+        loc={selectedLoc}
+        rank={selectedRank}
+        schools={locations.length}
+        totalDownloads={totalDownloads}
+        onClose={() => setSelectedId(null)}
+      />
     </Box>
   );
 }
