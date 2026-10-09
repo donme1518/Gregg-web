@@ -105,7 +105,7 @@ const MIN_APK_BYTES = 1024 * 1024; // 1 MB
 // and would rather record downloads there instead.
 const DOWNLOAD_COUNTER_API = "https://countapi.mileshilliard.com/api/v1";
 // Bumping the key (v1 -> v2) starts the public counter again from zero.
-const DOWNLOAD_COUNTER_KEY = "gregg-shorthand-dictionary-apk-downloads-v3";
+const DOWNLOAD_COUNTER_KEY = "gregg-shorthand-dictionary-apk-downloads-v4";
 
 /* ---- Where do learners come from? (OpenStreetMap + Supabase) ----
  * 100% free, no credit card needed:
